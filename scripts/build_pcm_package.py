@@ -79,10 +79,11 @@ def main(argv=None):
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f'{IDENTIFIER}.zip'
 
     # Load the tracked metadata.json and compute derived fields.
     metadata = json.loads((ROOT / 'metadata.json').read_text(encoding='utf-8'))
+    identifier = metadata.get('identifier', 'com.github.lou270.pinout-image-generator')
+    zip_path = out_dir / f'{identifier}.zip'
     install_size = compute_install_size()
 
     version_entry = metadata['versions'][0]
@@ -100,8 +101,10 @@ def main(argv=None):
     pkg_version = {
         'version': version_entry['version'],
         'status': version_entry.get('status', 'stable'),
-        'kicad_version': version_entry.get('kicad_version', '8.0'),
+        'kicad_version': version_entry.get('kicad_version', '10.0'),
     }
+    if 'runtime' in version_entry:
+        pkg_version['runtime'] = version_entry['runtime']
     if 'kicad_version_max' in version_entry:
         pkg_version['kicad_version_max'] = version_entry['kicad_version_max']
     if 'platforms' in version_entry:
@@ -121,13 +124,13 @@ def main(argv=None):
     repo_version['download_sha256'] = sha256_of(zip_path)
     if args.download_url_base:
         repo_version['download_url'] = (
-            f'{args.download_url_base.rstrip("/")}/{tag_name}/{IDENTIFIER}.zip'
+            f'{args.download_url_base.rstrip("/")}/{tag_name}/{identifier}.zip'
         )
     elif 'download_url' in version_entry:
         repo_version['download_url'] = version_entry['download_url']
     else:
         repo_version['download_url'] = (
-            f'https://github.com/lou270/pinout-image-generator/releases/download/{tag_name}/{IDENTIFIER}.zip'
+            f'https://github.com/lou270/pinout-image-generator/releases/download/{tag_name}/{identifier}.zip'
         )
     repo_metadata['versions'] = [repo_version]
 
