@@ -3,17 +3,17 @@
   "name": "Pinout Image Generator",
   "description": "Generate an annotated pinout image from the active board.",
   "description_full": "Pinout Image Generator extracts pad positions, net names and net classes from the currently-open board and produces a coloured pinout diagram overlaid on a top-view render. Labels and function categories can be fully edited before rendering. A separate CLI and Tkinter GUI are also available for workflows that start from a gerber F.Mask SVG and a custom PNG.",
-  "identifier": "com.lou270.pinout-maker",
+  "identifier": "com.lou270.pinout-image-generator",
   "type": "plugin",
   "author": {
     "name": "Louis Barbier",
     "contact": {
-      "web": "https://github.com/lou270/pinout-maker"
+      "web": "https://github.com/lou270/pinout-image-generator"
     }
   },
   "license": "MIT",
   "resources": {
-    "homepage": "https://github.com/lou270/pinout-maker"
+    "homepage": "https://github.com/lou270/pinout-image-generator"
   },
   "tags": ["pinout", "documentation", "svg", "pcb"],
   "versions": [
@@ -21,7 +21,7 @@
       "version": "1.0",
       "status": "stable",
       "kicad_version": "8.0",
-      "download_url": "https://github.com/lou270/pinout-maker/releases/latest/download/com.lou270.pinout-maker.zip",
+      "download_url": "https://github.com/lou270/pinout-image-generator/releases/latest/download/com.lou270.pinout-image-generator.zip",
       "download_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "download_size": 0,
       "install_size": 0

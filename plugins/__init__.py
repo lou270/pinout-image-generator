@@ -32,5 +32,5 @@ if pcbnew is not None:
     except Exception as _exc:
         # Never crash KiCad on startup — log and continue.
         import traceback
-        sys.stderr.write(f'[pinout-maker] plugin registration failed: {_exc}\n')
+        sys.stderr.write(f'[pinout-image-generator] plugin registration failed: {_exc}\n')
         sys.stderr.write(traceback.format_exc())

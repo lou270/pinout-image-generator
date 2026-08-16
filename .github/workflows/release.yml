@@ -39,7 +39,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/com.lou270.pinout-maker.zip
+            dist/com.lou270.pinout-image-generator.zip
             dist/metadata.json
 
       - name: Upload as workflow artifact
@@ -47,5 +47,5 @@ jobs:
         with:
           name: pcm-package
           path: |
-            dist/com.lou270.pinout-maker.zip
+            dist/com.lou270.pinout-image-generator.zip
             dist/metadata.json

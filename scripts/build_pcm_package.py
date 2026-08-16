@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT        = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / 'dist'
-IDENTIFIER  = 'com.lou270.pinout-maker'
+IDENTIFIER  = 'com.lou270.pinout-image-generator'
 
 INCLUDED_DIRS  = ['plugins', 'resources']
 INCLUDED_FILES = ['metadata.json']

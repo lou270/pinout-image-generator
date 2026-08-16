@@ -23,13 +23,13 @@ Generate annotated, publication-ready pinout diagrams (SVG & PNG) for PCBs. Work
 ### One-click via third-party repository
 
 1. Open KiCad → *Plugin and Content Manager* → *Manage repositories…* → *+*.
-2. Add `https://github.com/lou270/pinout-maker/releases/latest/download/metadata.json`.
+2. Add `https://github.com/lou270/pinout-image-generator/releases/latest/download/metadata.json`.
 3. Select the repository, find **Pinout Image Generator** under *Plugins*, click *Install*.
 4. Restart the PCB editor — the Pinout Image Generator toolbar icon appears.
 
 ### Manual install (KiCad 7, 8, 9+)
 
-1. Download `com.lou270.pinout-maker.zip` from the [Releases](https://github.com/lou270/pinout-maker/releases) page.
+1. Download `com.lou270.pinout-image-generator.zip` from the [Releases](https://github.com/lou270/pinout-image-generator/releases) page.
 2. KiCad → *Plugin and Content Manager* → *Install from file* → select the zip.
 
 ### Using in KiCad
@@ -93,7 +93,7 @@ python -m unittest discover -s tests -v
 ## Repository Layout
 
 ```
-pinout-maker/
+pinout-image-generator/
 ├── metadata.json              # KiCad PCM manifest
 ├── resources/icon.png         # Toolbar icon (64×64)
 ├── plugins/                   # Core shared modules and KiCad plugin
