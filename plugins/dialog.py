@@ -138,11 +138,13 @@ class PinoutDialog(wx.Dialog if wx else object):
         conn_fps = [f for f in info_list if f['is_connector']]
         other_fps = [f for f in info_list if not f['is_connector']]
 
-        items.append(('All detected connectors', None))
+        items.append(('All detected connectors (excluding DNP)', None))
         for f in conn_fps:
-            items.append((f"{f['ref']} ({f['pad_count']} pads)", f['ref']))
+            dnp_str = ' [DNP]' if f.get('dnp') else ''
+            items.append((f"{f['ref']} ({f['pad_count']} pads){dnp_str}", f['ref']))
         for f in other_fps:
-            items.append((f"{f['ref']} ({f['pad_count']} pads)", f['ref']))
+            dnp_str = ' [DNP]' if f.get('dnp') else ''
+            items.append((f"{f['ref']} ({f['pad_count']} pads){dnp_str}", f['ref']))
 
         return items
 

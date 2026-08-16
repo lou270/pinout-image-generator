@@ -34,6 +34,15 @@ def _to_mm(value_nm):
     return float(value_nm) / 1e6
 
 
+def _is_dnp(fp):
+    """Check if footprint has the 'Do not populate' (DNP) attribute set."""
+    if hasattr(fp, 'IsDNP'):
+        return bool(fp.IsDNP())
+    if hasattr(fp, 'GetDNP'):
+        return bool(fp.GetDNP())
+    return False
+
+
 def load_netclass_map(path=None):
     """Load the net-name → function regex rules."""
     if path is None:
@@ -76,22 +85,30 @@ def get_board_footprint_info(board, pattern=DEFAULT_CONNECTOR_PATTERN):
             continue
         is_sel = getattr(fp, 'IsSelected', lambda: False)()
         is_conn = bool(re.match(pattern, ref, re.IGNORECASE))
+        is_dnp_val = _is_dnp(fp)
         info.append({
             'ref': ref,
             'pad_count': pad_count,
             'selected': is_sel,
             'is_connector': is_conn,
+            'dnp': is_dnp_val,
         })
     return info
 
 
-def get_candidate_footprints(board, pattern=DEFAULT_CONNECTOR_PATTERN):
+def get_candidate_footprints(board, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=False):
     """Return a list of footprint references that look like connectors/headers."""
     fps = list_footprints(board)
-    candidates = [ref for ref, _ in fps if re.match(pattern, ref, re.IGNORECASE)]
+    candidates = []
+    for ref, fp in fps:
+        if not include_dnp and _is_dnp(fp):
+            continue
+        if re.match(pattern, ref, re.IGNORECASE):
+            candidates.append(ref)
+
     if not candidates:
-        # Fallback: all footprints that have pads
-        candidates = [ref for ref, fp in fps if len(list(fp.Pads())) > 0]
+        # Fallback: all footprints that have pads (excluding DNP unless requested)
+        candidates = [ref for ref, fp in fps if len(list(fp.Pads())) > 0 and (include_dnp or not _is_dnp(fp))]
     return candidates
 
 
@@ -139,7 +156,7 @@ def parse_footprint(footprint, board, rules=None):
     """Extract pins from a single footprint.
 
     Returns (pins, metadata) where metadata is a dict pin.number → {
-        'net_name', 'net_class', 'suggested_function', 'pad_name', 'footprint'
+        'net_name', 'net_class', 'suggested_function', 'pad_name', 'footprint', 'dnp'
     }.
     """
     if pcbnew is None and not hasattr(board, 'GetBoardEdgesBoundingBox'):
@@ -151,6 +168,7 @@ def parse_footprint(footprint, board, rules=None):
     pins = []
     meta = {}
     fp_ref = footprint.GetReference()
+    is_dnp_val = _is_dnp(footprint)
     pads = list(footprint.Pads())
 
     if pads:
@@ -184,13 +202,14 @@ def parse_footprint(footprint, board, rules=None):
             'suggested_function': match_function(net_name, net_class, rules),
             'pad_name':           pad_num,
             'footprint':          fp_ref,
+            'dnp':                is_dnp_val,
         }
         pins.append(pin)
 
     return pins, meta
 
 
-def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR_PATTERN):
+def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=False):
     """Extract pins from specified footprint(s) or all detected connector footprints.
 
     Args:
@@ -198,6 +217,7 @@ def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR
         footprint_ref: str (e.g. 'J1'), list of str, or None (checks selected, then pattern).
         rules: pre-loaded netclass_map rules or None.
         pattern: regex pattern to match connector references when footprint_ref is None.
+        include_dnp: if False, skips footprints marked with DNP (Do Not Populate).
 
     Returns:
         (pins: list[Pin], meta: dict, svg_size_mm: tuple[float, float])
@@ -223,10 +243,10 @@ def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR
         if selected_fps:
             fps = selected_fps
         else:
-            fps = [fp for ref, fp in all_fps if re.match(pattern, ref, re.IGNORECASE)]
+            fps = [fp for ref, fp in all_fps if re.match(pattern, ref, re.IGNORECASE) and (include_dnp or not _is_dnp(fp))]
             if not fps:
-                # Fallback to all footprints with pads
-                fps = [fp for ref, fp in all_fps if len(list(fp.Pads())) > 0]
+                # Fallback to all footprints with pads (excluding DNP unless requested)
+                fps = [fp for ref, fp in all_fps if len(list(fp.Pads())) > 0 and (include_dnp or not _is_dnp(fp))]
 
     all_pins, all_meta = [], {}
     offset = 0

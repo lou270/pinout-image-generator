@@ -144,6 +144,21 @@ class TestBoardParser(unittest.TestCase):
         self.assertAlmostEqual(size_mm[0], 50.0)
         self.assertAlmostEqual(size_mm[1], 30.0)
 
+    def test_dnp_footprints(self):
+        pads = [MockPad(2000000, 5000000, name="1", net_name="VCC", net_class="Power")]
+        fp_active = MockFootprint("J1", pads)
+        fp_dnp = MockFootprint("J2", pads)
+        fp_dnp.IsDNP = lambda: True
+
+        board = MockBoard([fp_active, fp_dnp])
+        pins, meta, _ = parse_board(board, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=False)
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(meta[1]['footprint'], "J1")
+
+        pins_with_dnp, _, _ = parse_board(board, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=True)
+        self.assertEqual(len(pins_with_dnp), 2)
+
 
 if __name__ == '__main__':
     unittest.main()
+
