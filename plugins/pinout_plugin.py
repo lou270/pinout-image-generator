@@ -25,6 +25,8 @@ from function import render_pinout
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH  = os.path.join(os.path.dirname(PLUGIN_DIR), 'resources', 'icon.png')
+if not os.path.isfile(ICON_PATH):
+    ICON_PATH = os.path.join(PLUGIN_DIR, 'resources', 'icon.png')
 CONFIG_PATH = os.path.join(PLUGIN_DIR, 'config.json')
 
 
@@ -41,13 +43,19 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
         try:
             self._run()
         except Exception as exc:
-            wx.MessageBox(
-                f'{exc}\n\n{traceback.format_exc()}',
-                'Pinout Maker — error',
-                wx.OK | wx.ICON_ERROR,
-            )
+            if wx:
+                wx.MessageBox(
+                    f'{exc}\n\n{traceback.format_exc()}',
+                    'Pinout Maker — error',
+                    wx.OK | wx.ICON_ERROR,
+                )
+            else:
+                raise
 
     def _run(self):
+        if pcbnew is None or wx is None:
+            raise RuntimeError("pcbnew and wx are required inside KiCad.")
+
         board = pcbnew.GetBoard()
         if board is None:
             wx.MessageBox('No board open.', 'Pinout Maker', wx.OK | wx.ICON_WARNING)
@@ -56,11 +64,10 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
         # Extract pads + nets.
         pins, meta, svg_size_mm = board_parser.parse_board(board)
         if not pins:
-            # Fallback: let the user fill everything by hand.
             pins = []
             meta = {}
 
-        # Render top-view PNG (may be None if strategies failed).
+        # Render top-view PNG (with transparent background)
         board_image = board_render.render_top_view(board)
         if board_image is None:
             with wx.FileDialog(None,

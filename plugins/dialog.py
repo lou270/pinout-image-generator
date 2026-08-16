@@ -6,14 +6,18 @@
 """wxPython dialog for reviewing/editing detected pins before rendering.
 
 Grid columns: #, X (mm), Y (mm), Side, Label, Function, Show.
-Users can add / remove rows, edit any cell, and choose the output path.
+Users can add / remove rows, edit any cell, define multiple functions per pin
+(either via comma separation or multiple rows per pin), and choose the output path.
 """
 
 import json
 import os
 
-import wx
-import wx.grid
+try:
+    import wx
+    import wx.grid
+except ImportError:
+    wx = None
 
 import save as save_mod
 from Pin import Pin
@@ -22,11 +26,14 @@ from Pin import Pin
 COLS = ('#', 'X (mm)', 'Y (mm)', 'Side', 'Label', 'Function', 'Show')
 
 
-class PinoutDialog(wx.Dialog):
+class PinoutDialog(wx.Dialog if wx else object):
 
     def __init__(self, parent, pins, meta, svg_size_mm, board_image_path,
                  function_names, default_output):
-        super().__init__(parent, title='Pinout Maker', size=(820, 520),
+        if not wx:
+            raise RuntimeError("wxPython is required to display PinoutDialog")
+
+        super().__init__(parent, title='Pinout Maker', size=(860, 540),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self._function_names = list(function_names)
@@ -36,17 +43,26 @@ class PinoutDialog(wx.Dialog):
         panel   = wx.Panel(self)
         sizer   = wx.BoxSizer(wx.VERTICAL)
 
+        # ── Header instructions ───────────────────────────────────────────────
+        help_text = wx.StaticText(
+            panel,
+            label='Tip: Multiple functions on a pin can be entered separated by commas '
+                  '(e.g. Label: "TX, GPIO5" | Function: "UART, GPIO/PWM") or on separate rows.'
+        )
+        help_text.SetForegroundColour(wx.Colour(100, 100, 100))
+        sizer.Add(help_text, 0, wx.ALL, 6)
+
         # ── Grid ──────────────────────────────────────────────────────────────
         self.grid = wx.grid.Grid(panel)
         self.grid.CreateGrid(0, len(COLS))
         for i, name in enumerate(COLS):
             self.grid.SetColLabelValue(i, name)
-        self.grid.SetColSize(0, 40)
+        self.grid.SetColSize(0, 45)
         self.grid.SetColSize(1, 80)
         self.grid.SetColSize(2, 80)
-        self.grid.SetColSize(3, 60)
-        self.grid.SetColSize(4, 140)
-        self.grid.SetColSize(5, 140)
+        self.grid.SetColSize(3, 70)
+        self.grid.SetColSize(4, 170)
+        self.grid.SetColSize(5, 170)
         self.grid.SetColSize(6, 50)
 
         for pin in pins:
@@ -60,7 +76,7 @@ class PinoutDialog(wx.Dialog):
                 function=info.get('suggested_function', ''),
             )
 
-        sizer.Add(self.grid, 1, wx.EXPAND | wx.ALL, 6)
+        sizer.Add(self.grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # ── Row buttons ───────────────────────────────────────────────────────
         row_btns = wx.BoxSizer(wx.HORIZONTAL)
@@ -74,7 +90,7 @@ class PinoutDialog(wx.Dialog):
 
         # ── Output path ───────────────────────────────────────────────────────
         out_row = wx.BoxSizer(wx.HORIZONTAL)
-        out_row.Add(wx.StaticText(panel, label='Output:'),
+        out_row.Add(wx.StaticText(panel, label='Output SVG:'),
                     0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.out_ctrl = wx.TextCtrl(panel, value=default_output)
         browse_btn = wx.Button(panel, label='…', size=(28, -1))
@@ -135,8 +151,14 @@ class PinoutDialog(wx.Dialog):
     # ── Result ────────────────────────────────────────────────────────────────
 
     def collect(self, function_color_map):
-        """Read the grid and return (pins, svg_size_mm, output_path)."""
-        pins = []
+        """Read the grid and return (pins, svg_size_mm, output_path).
+        
+        Supports multiple functions per pin either via comma-separated entries
+        or multiple rows with identical pin number / coordinates.
+        """
+        pins_by_key = {}
+        pins_order = []
+
         for row in range(self.grid.GetNumberRows()):
             try:
                 number = int(self.grid.GetCellValue(row, 0).strip())
@@ -147,22 +169,37 @@ class PinoutDialog(wx.Dialog):
             side  = self.grid.GetCellValue(row, 3).strip() or 'left'
             label = self.grid.GetCellValue(row, 4).strip()
             func  = self.grid.GetCellValue(row, 5).strip()
-            show  = self.grid.GetCellValue(row, 6).strip() in ('1', 'True', 'true')
+            show  = self.grid.GetCellValue(row, 6).strip() in ('1', 'True', 'true', 'TRUE')
             if not show:
                 continue
 
-            pin = Pin(cx=x, cy=y, r=0.85, number=number, side=side, displayed=True)
-            if label or func:
-                pin.add_function(
-                    label or func or f'pin_{number}',
-                    function_color_map.get(func, '#888888'),
-                )
-            pins.append(pin)
+            key = (number, round(x, 3), round(y, 3))
+            if key not in pins_by_key:
+                pin = Pin(cx=x, cy=y, r=0.85, number=number, side=side, displayed=True)
+                pins_by_key[key] = pin
+                pins_order.append(pin)
+            else:
+                pin = pins_by_key[key]
 
-        return pins, self._svg_size_mm, self.out_ctrl.GetValue().strip()
+            # Parse single or comma-separated functions
+            if label or func:
+                labels = [lbl.strip() for lbl in label.split(',') if lbl.strip()] if ',' in label else ([label] if label else [])
+                funcs  = [f.strip() for f in func.split(',') if f.strip()] if ',' in func else ([func] if func else [])
+                count = max(len(labels), len(funcs), 1)
+
+                for idx in range(count):
+                    sub_lbl = labels[idx] if idx < len(labels) else (labels[0] if labels else '')
+                    sub_func = funcs[idx] if idx < len(funcs) else (funcs[0] if funcs else '')
+                    if sub_lbl or sub_func:
+                        color = function_color_map.get(sub_func, '#888888')
+                        pin.add_function(sub_lbl or sub_func or f'pin_{number}', color)
+
+        return pins_order, self._svg_size_mm, self.out_ctrl.GetValue().strip()
 
 
 def function_color_map(config_path):
     """Build {function_name: hex_color} from config.json."""
+    if not os.path.isfile(config_path):
+        return {}
     cfg = save_mod.from_json(config_path)
     return {f['name']: f['color'] for f in cfg.get('function', [])}

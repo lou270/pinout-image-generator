@@ -5,9 +5,8 @@
 ########################################
 """Extract pad positions, net names and net classes from a KiCad BOARD.
 
-Only usable inside KiCad (requires pcbnew). The parser produces plain Pin
-objects (defined in Pin.py) plus sidecar metadata dicts — the same shape
-the existing renderer consumes.
+Only usable inside KiCad (requires pcbnew) or tested with duck-typed board objects.
+The parser produces Pin objects (Pin.py) and sidecar metadata dicts.
 """
 
 import json
@@ -22,17 +21,23 @@ except ImportError:
     pcbnew = None
 
 
+# Expanded connector / pin header regex pattern (case-insensitive)
+DEFAULT_CONNECTOR_PATTERN = r'^(J|CN|P|HDR|CONN|PIN|MOD|U|EXT|EXP|HEADER)\d*'
+
+
 def _to_mm(value_nm):
-    """Wrap pcbnew.ToMM which handles both ints and VECTOR2I types across KiCad versions."""
-    if hasattr(pcbnew, 'ToMM'):
+    """Wrap pcbnew.ToMM which handles ints, floats, and VECTOR2I across KiCad versions."""
+    if pcbnew is not None and hasattr(pcbnew, 'ToMM'):
         return pcbnew.ToMM(value_nm)
-    return value_nm / 1e6
+    return float(value_nm) / 1e6
 
 
 def load_netclass_map(path=None):
     """Load the net-name → function regex rules."""
     if path is None:
         path = os.path.join(os.path.dirname(__file__), 'netclass_map.json')
+    if not os.path.isfile(path):
+        return []
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     return data.get('rules', [])
@@ -41,17 +46,32 @@ def load_netclass_map(path=None):
 def match_function(net_name, net_class, rules):
     """Return the first matching function name, or ''."""
     for key in (net_name or '', net_class or ''):
+        if not key:
+            continue
         for rule in rules:
-            if re.match(rule['pattern'], key, re.IGNORECASE):
-                return rule['function']
+            try:
+                if re.match(rule['pattern'], key, re.IGNORECASE):
+                    return rule['function']
+            except re.error:
+                continue
     return ''
 
 
 def list_footprints(board):
     """Return [(reference, footprint)] for every footprint on the board."""
-    if pcbnew is None:
-        raise RuntimeError('pcbnew is not available — this function must run inside KiCad.')
+    if pcbnew is None and not hasattr(board, 'GetFootprints'):
+        raise RuntimeError('pcbnew is not available — this function must run inside KiCad or with a valid board object.')
     return [(fp.GetReference(), fp) for fp in board.GetFootprints()]
+
+
+def get_candidate_footprints(board, pattern=DEFAULT_CONNECTOR_PATTERN):
+    """Return a list of footprint references that look like connectors/headers."""
+    fps = list_footprints(board)
+    candidates = [ref for ref, _ in fps if re.match(pattern, ref, re.IGNORECASE)]
+    if not candidates:
+        # Fallback: all footprints that have pads
+        candidates = [ref for ref, fp in fps if len(list(fp.Pads())) > 0]
+    return candidates
 
 
 def _pad_radius_mm(pad):
@@ -74,20 +94,36 @@ def _board_bbox_mm(board):
 
 
 def _detect_side(cx, cy, bbox_mm):
-    """left / right / top / bottom based on board aspect ratio + pad position."""
+    """Detect 'left', 'right', 'top', or 'bottom' based on board bounding box & pad coordinates."""
     min_x, min_y, w, h = bbox_mm
+    if w <= 0 or h <= 0:
+        return 'left'
+
     cxr = cx - min_x
     cyr = cy - min_y
+
+    rx = cxr / w
+    ry = cyr / h
+
     if w >= h * 1.5:
-        return 'left' if cxr < w / 2 else 'right'
+        if ry < 0.15:
+            return 'top'
+        elif ry > 0.85:
+            return 'bottom'
+        return 'left' if rx < 0.5 else 'right'
+
     if h >= w * 1.5:
-        return 'top' if cyr < h / 2 else 'bottom'
-    # Roughly square: pick the closest edge.
+        if rx < 0.15:
+            return 'left'
+        elif rx > 0.85:
+            return 'right'
+        return 'top' if ry < 0.5 else 'bottom'
+
     distances = {
-        'left':   cxr,
-        'right':  w - cxr,
-        'top':    cyr,
-        'bottom': h - cyr,
+        'left':   rx,
+        'right':  1.0 - rx,
+        'top':    ry,
+        'bottom': 1.0 - ry,
     }
     return min(distances, key=distances.get)
 
@@ -96,17 +132,18 @@ def parse_footprint(footprint, board, rules=None):
     """Extract pins from a single footprint.
 
     Returns (pins, metadata) where metadata is a dict pin.number → {
-        'net_name', 'net_class', 'suggested_function', 'pad_name'
-    }. The pin numbering follows the pad order reported by KiCad.
+        'net_name', 'net_class', 'suggested_function', 'pad_name', 'footprint'
+    }.
     """
-    if pcbnew is None:
-        raise RuntimeError('pcbnew is not available — this function must run inside KiCad.')
+    if pcbnew is None and not hasattr(board, 'GetBoardEdgesBoundingBox'):
+        raise RuntimeError('pcbnew is not available — this function must run inside KiCad or with a valid board object.')
     if rules is None:
         rules = load_netclass_map()
 
     bbox_mm = _board_bbox_mm(board)
     pins = []
     meta = {}
+    fp_ref = footprint.GetReference()
 
     for idx, pad in enumerate(footprint.Pads(), start=1):
         pos = pad.GetPosition()
@@ -114,8 +151,9 @@ def parse_footprint(footprint, board, rules=None):
         cy = _to_mm(pos.y) if hasattr(pos, 'y') else _to_mm(pos[1])
         r = _pad_radius_mm(pad)
         side = _detect_side(cx, cy, bbox_mm)
+        pad_num = pad.GetName() or str(idx)
 
-        pin = Pin(cx=cx, cy=cy, r=r, number=idx, side=side)
+        pin = Pin(cx=cx, cy=cy, r=r, number=idx, side=side, pad_name=pad_num, footprint=fp_ref)
         net_name = pad.GetNetname() if pad.GetNet() else ''
         try:
             net_class = pad.GetNetClassName()
@@ -123,46 +161,56 @@ def parse_footprint(footprint, board, rules=None):
             net_class = ''
 
         meta[idx] = {
-            'net_name':          net_name,
-            'net_class':         net_class,
+            'net_name':           net_name,
+            'net_class':          net_class,
             'suggested_function': match_function(net_name, net_class, rules),
-            'pad_name':          pad.GetName() or str(idx),
+            'pad_name':           pad_num,
+            'footprint':          fp_ref,
         }
         pins.append(pin)
 
     return pins, meta
 
 
-def parse_board(board, footprint_ref=None, rules=None):
-    """Entry point. Extract pins from a chosen footprint (or all through-hole pads).
+def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR_PATTERN):
+    """Extract pins from specified footprint(s) or all detected connector footprints.
 
     Args:
-        board: pcbnew.BOARD instance.
-        footprint_ref: reference (e.g. 'J1') to restrict extraction to one footprint.
-                       If None, scans every footprint whose reference starts with J/CN/P.
-        rules: optional pre-loaded netclass_map rules.
+        board: pcbnew.BOARD instance or duck-typed board object.
+        footprint_ref: str (e.g. 'J1'), list of str, or None to match pattern.
+        rules: pre-loaded netclass_map rules or None.
+        pattern: regex pattern to match connector references when footprint_ref is None.
 
-    Returns: (pins: list[Pin], meta: dict, svg_size_mm: tuple[float, float])
+    Returns:
+        (pins: list[Pin], meta: dict, svg_size_mm: tuple[float, float])
     """
-    if pcbnew is None:
-        raise RuntimeError('pcbnew is not available — this function must run inside KiCad.')
+    if pcbnew is None and not hasattr(board, 'GetFootprints'):
+        raise RuntimeError('pcbnew is not available — this function must run inside KiCad or with a valid board object.')
 
     rules = rules or load_netclass_map()
     bbox = _board_bbox_mm(board)
     svg_size_mm = (bbox[2], bbox[3])
 
+    all_fps = list_footprints(board)
+
     if footprint_ref:
-        fps = [fp for ref, fp in list_footprints(board) if ref == footprint_ref]
+        if isinstance(footprint_ref, str):
+            target_refs = {footprint_ref}
+        else:
+            target_refs = set(footprint_ref)
+        fps = [fp for ref, fp in all_fps if ref in target_refs]
     else:
-        fps = [fp for ref, fp in list_footprints(board)
-               if re.match(r'^(J|CN|P)\d', ref)]
+        fps = [fp for ref, fp in all_fps if re.match(pattern, ref, re.IGNORECASE)]
+        if not fps:
+            # Fallback to all footprints with pads
+            fps = [fp for ref, fp in all_fps if len(list(fp.Pads())) > 0]
 
     all_pins, all_meta = [], {}
     offset = 0
     for fp in fps:
         pins, meta = parse_footprint(fp, board, rules)
-        # Shift pads to origin of the board bounding box (SVG lives in that frame).
         for pin in pins:
+            # Shift pads to origin of the board bounding box
             pin.cx -= bbox[0]
             pin.cy -= bbox[1]
             pin.number += offset

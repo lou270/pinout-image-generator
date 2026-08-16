@@ -34,38 +34,33 @@ def scale_point(point, scale_x, scale_y):
     return (point[0] * scale_x, point[1] * scale_y)
 
 def round_corner_with_bezier(p1, p2, p3, radius):
-    # Calculate the direction vectors of the two segments
     v1 = (p2[0] - p1[0], p2[1] - p1[1])
     v2 = (p3[0] - p2[0], p3[1] - p2[1])
-    
-    # Normalize the vectors to get unit vectors
-    v1_normalized = normalize(v1)
-    v2_normalized = normalize(v2)
-    
-    # Calculate the angle between the two vectors
-    angle_cosine = v1_normalized[0] * v2_normalized[0] + v1_normalized[1] * v2_normalized[1]
-    angle = math.acos(angle_cosine)
-    
-    # Calculate the distance to move the points along each line to make room for the curve
-    d = radius * math.tan(angle / 2)
-    radius_start = distance(p1, p2) * 0.1
-    radius_end = distance(p2, p3) * 0.1
-    radius_start = d
-    radius_end = d
-    
-    # Move along the first line to find the start of the curve
-    arc_start = move_point_along_vector(p2, (-v1_normalized[0], -v1_normalized[1]), radius_start)
-    
-    # Move along the second line to find the end of the curve
-    arc_end = move_point_along_vector(p2, v2_normalized, radius_end)
-    
-    # Calculate the bisector vector
-    bisector = normalize((v1_normalized[0] + v2_normalized[0], v1_normalized[1] + v2_normalized[1]))
-    
-    # Calculate the control point for the Bezier curve
-    control_point = move_point_along_vector(p2, bisector, radius)
+    len1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
+    len2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
+    if len1 < 1e-6 or len2 < 1e-6:
+        return p2, p2, p2
+
+    u1 = (v1[0] / len1, v1[1] / len1)
+    u2 = (v2[0] / len2, v2[1] / len2)
+
+    dot = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+    angle = math.acos(dot)
+
+    if angle < 1e-4:
+        return p2, p2, p2
+
+    try:
+        d = radius * math.tan(angle / 2)
+    except (ZeroDivisionError, ValueError):
+        d = radius
+
+    max_d = min(len1, len2) * 0.45
+    d = max(0.0, min(d, max_d))
+
+    arc_start = (p2[0] - u1[0] * d, p2[1] - u1[1] * d)
+    arc_end   = (p2[0] + u2[0] * d, p2[1] + u2[1] * d)
     control_point = p2
-    
     return arc_start, control_point, arc_end
 
 def parse_svg_path(path_data):
@@ -248,6 +243,16 @@ def get_min_max_pos(element):
             w = float(element.attrib.get('width', 0))
             h = float(element.attrib.get('height', 0))
             min_x, max_x, min_y, max_y = x, x + w, y, y + h
+        except (TypeError, ValueError):
+            pass
+    elif element.tag.endswith('text'):
+        try:
+            x = float(element.attrib.get('x', 0))
+            y = float(element.attrib.get('y', 0))
+            text_len = len(element.text or '')
+            half_w = max(2.0, text_len * 0.45)
+            min_x, max_x = x - half_w, x + half_w
+            min_y, max_y = y - 1.5, y + 1.5
         except (TypeError, ValueError):
             pass
 

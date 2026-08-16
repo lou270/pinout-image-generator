@@ -6,13 +6,16 @@
 """Render a top-view PNG of the active board.
 
 Tries three strategies, in order:
-  1. pcbnew.PLOT_CONTROLLER → SVG → rasterise with cairosvg.
-  2. Subprocess call to `kicad-cli pcb render` (KiCad 8+).
+  1. Subprocess call to `kicad-cli pcb render --background transparent` (KiCad 8+).
+  2. pcbnew.PLOT_CONTROLLER → SVG → rasterise with cairosvg.
   3. Return None so the caller can prompt the user for a PNG manually.
 """
 
+import glob
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 
 try:
@@ -23,15 +26,79 @@ except ImportError:
 try:
     import cairosvg
 except Exception:
-    # cairosvg may be installed but fail to load its native cairo lib
-    # (common on Windows without MSYS2). Treat as unavailable.
     cairosvg = None
+
+
+def find_kicad_cli():
+    """Locate the kicad-cli executable across PATH and standard install paths."""
+    # 1. System PATH
+    found = shutil.which('kicad-cli') or shutil.which('kicad-cli.exe')
+    if found and os.path.isfile(found):
+        return found
+
+    # 2. Alongside the current python executable (KiCad's internal Python)
+    py_dir = os.path.dirname(sys.executable)
+    cand1 = os.path.join(py_dir, 'kicad-cli.exe' if sys.platform == 'win32' else 'kicad-cli')
+    if os.path.isfile(cand1):
+        return cand1
+
+    # 3. Windows standard installations (e.g. C:\Program Files\KiCad\*\bin\kicad-cli.exe)
+    if sys.platform == 'win32':
+        search_patterns = [
+            r'C:\Program Files\KiCad\*\bin\kicad-cli.exe',
+            r'C:\Program Files (x86)\KiCad\*\bin\kicad-cli.exe',
+            os.path.expandvars(r'%LOCALAPPDATA%\Programs\KiCad\*\bin\kicad-cli.exe'),
+        ]
+        for pattern in search_patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                # Sort to pick highest version (e.g. 10.0 > 9.0 > 8.0)
+                matches.sort(reverse=True)
+                return matches[0]
+
+    # 4. macOS standard location
+    elif sys.platform == 'darwin':
+        macos_cand = '/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli'
+        if os.path.isfile(macos_cand):
+            return macos_cand
+
+    # 5. Linux standard locations
+    elif sys.platform.startswith('linux'):
+        for loc in ['/usr/bin/kicad-cli', '/usr/local/bin/kicad-cli']:
+            if os.path.isfile(loc):
+                return loc
+
+    return None
 
 
 def _tempfile(suffix):
     fd, path = tempfile.mkstemp(prefix='pinout_board_', suffix=suffix)
     os.close(fd)
     return path
+
+
+def _kicad_cli_render(board_path, out_png):
+    """Render board top-view with transparent background using kicad-cli."""
+    exe = find_kicad_cli()
+    if not exe:
+        return None
+
+    cmd = [
+        exe, 'pcb', 'render',
+        '--side', 'top',
+        '--background', 'transparent',
+        '--quality', 'high',
+        '--output', out_png,
+        board_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 and os.path.isfile(out_png) and os.path.getsize(out_png) > 0:
+            return out_png
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    return None
 
 
 def _plot_to_svg(board, out_svg):
@@ -50,10 +117,10 @@ def _plot_to_svg(board, out_svg):
     opts.SetDrillMarksType(getattr(pcbnew, 'DRILL_MARKS_NO_DRILL_SHAPE', 0))
 
     layers = [
-        ('Edge.Cuts', pcbnew.Edge_Cuts),
-        ('F.Mask',    pcbnew.F_Mask),
-        ('F.Cu',      pcbnew.F_Cu),
-        ('F.SilkS',   pcbnew.F_SilkS),
+        ('Edge.Cuts', getattr(pcbnew, 'Edge_Cuts', 44)),
+        ('F.Mask',    getattr(pcbnew, 'F_Mask', 38)),
+        ('F.Cu',      getattr(pcbnew, 'F_Cu', 0)),
+        ('F.SilkS',   getattr(pcbnew, 'F_SilkS', 37)),
     ]
     plot_ctrl.OpenPlotfile('TopView', pcbnew.PLOT_FORMAT_SVG, 'Pinout top view')
     for name, layer_id in layers:
@@ -61,8 +128,7 @@ def _plot_to_svg(board, out_svg):
         plot_ctrl.PlotLayer()
     plot_ctrl.ClosePlot()
 
-    # KiCad writes to <out_dir>/<board_name>-TopView.svg — find it.
-    basename = os.path.splitext(os.path.basename(board.GetFileName()))[0]
+    basename = os.path.splitext(os.path.basename(board.GetFileName() or 'board'))[0]
     produced = os.path.join(out_dir, f'{basename}-TopView.svg')
     if os.path.isfile(produced):
         os.replace(produced, out_svg)
@@ -71,27 +137,14 @@ def _plot_to_svg(board, out_svg):
 
 
 def _svg_to_png(in_svg, out_png, target_width_px=2000):
-    """Rasterise an SVG to PNG via cairosvg. Returns out_png or None on failure."""
+    """Rasterise an SVG to PNG via cairosvg."""
     if cairosvg is None:
         return None
     try:
         cairosvg.svg2png(url=in_svg, write_to=out_png, output_width=target_width_px)
-        return out_png
-    except Exception:
-        return None
-
-
-def _kicad_cli_render(board_path, out_png):
-    """Fallback: `kicad-cli pcb render --side top`."""
-    exe = 'kicad-cli'
-    try:
-        result = subprocess.run(
-            [exe, 'pcb', 'render', '--side', 'top', '--output', out_png, board_path],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode == 0 and os.path.isfile(out_png):
+        if os.path.isfile(out_png) and os.path.getsize(out_png) > 0:
             return out_png
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except Exception:
         pass
     return None
 
@@ -100,8 +153,15 @@ def render_top_view(board):
     """Produce a top-view PNG of the board. Returns path or None if all strategies failed."""
     out_png = _tempfile('.png')
 
-    # Strategy 1: plot SVG + cairosvg.
-    if pcbnew is not None and cairosvg is not None:
+    # Strategy 1: kicad-cli with transparent background
+    board_path = board.GetFileName() if (pcbnew and board) else None
+    if board_path and os.path.isfile(board_path):
+        result = _kicad_cli_render(board_path, out_png)
+        if result:
+            return result
+
+    # Strategy 2: plot SVG + cairosvg
+    if pcbnew is not None and cairosvg is not None and board:
         svg_tmp = _tempfile('.svg')
         try:
             produced_svg = _plot_to_svg(board, svg_tmp)
@@ -109,16 +169,16 @@ def render_top_view(board):
                 return out_png
         finally:
             if os.path.isfile(svg_tmp):
-                os.unlink(svg_tmp)
+                try:
+                    os.unlink(svg_tmp)
+                except OSError:
+                    pass
 
-    # Strategy 2: kicad-cli.
-    board_path = board.GetFileName() if pcbnew else None
-    if board_path and os.path.isfile(board_path):
-        result = _kicad_cli_render(board_path, out_png)
-        if result:
-            return result
-
-    # Strategy 3: give up — caller prompts user.
+    # Strategy 3: give up — caller prompts user
     if os.path.isfile(out_png):
-        os.unlink(out_png)
+        try:
+            os.unlink(out_png)
+        except OSError:
+            pass
+
     return None

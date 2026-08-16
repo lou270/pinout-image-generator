@@ -4,26 +4,21 @@
 # MIT License
 ########################################
 
-## Process
-# Get real image of PCB
-# Get gerber file
-# Scale image with gerber file
-# Find every holes in gerber
-# Create a table to fill by user with pin number/function/name
-# Export created image
-
-import sys, os, argparse, csv
-from PIL import Image
+import argparse
+import csv
 import math
+import os
 import re
+import sys
 import xml.etree.ElementTree as ET
+from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plugins'))
 
 from function import *
 import save
 import svg
-import Pin
+from Pin import Pin
 
 
 def parse_args():
@@ -35,17 +30,17 @@ Workflow:
   1. Generate a pin template CSV from your gerber mask:
        python main.py --input-svg mask.svg --generate-template
 
-  2. Fill in pins_template.csv (number, label, function columns).
+  2. Fill in pins_template.csv (number, label, function, side columns).
 
   3. Generate the final pinout:
        python main.py --input-svg mask.svg --board-image board.png --pins pins_template.csv
 
 CSV format (one row per function box; multiple rows per pin for multiple functions):
-  number,label,function
-  1,VCC,Power
-  2,GND,Ground
-  3,TX,UART
-  3,GPIO5,GPIO/PWM
+  number,label,function,side
+  1,VCC,Power,left
+  2,GND,Ground,left
+  3,TX,UART,right
+  3,GPIO5,GPIO/PWM,right
 
 Available function types are defined in config.json (Power, Ground, UART, etc.).
         """
@@ -64,8 +59,10 @@ Available function types are defined in config.json (Power, Ground, UART, etc.).
                         help='Detect pins and write pins_template.csv, then exit')
     parser.add_argument('--no-png', action='store_true',
                         help='Skip the PNG export alongside the SVG')
-    parser.add_argument('--png-dpi', type=int, default=600,
+    parser.add_argument('--png-dpi', type=int, default=300,
                         help='DPI for the PNG export (default: %(default)s)')
+    parser.add_argument('--no-sort-pins', action='store_true',
+                        help='Disable spatial sorting of detected pins')
     return parser.parse_args()
 
 
@@ -73,12 +70,13 @@ def load_pins_csv(csv_path, config):
     """Load pin definitions from a CSV file.
 
     CSV columns:
-      number  – pin number (integer, matches detection order)
-      label   – text shown in the function box
+      number   – pin number (integer, matches detection order)
+      label    – text shown in the function box
       function – function type name from config (determines colour)
+      side     – optional side override ('left', 'right', 'top', 'bottom')
 
     Multiple rows with the same number add multiple function boxes.
-    Returns a dict: {pin_number: [{'name': label, 'color': hex}, ...]}
+    Returns a dict: {pin_number: {'functions': [{'name': label, 'color': hex}, ...], 'side': side_str}}
     """
     color_map = {f['name']: f['color'] for f in config.get('function', [])}
 
@@ -92,32 +90,40 @@ def load_pins_csv(csv_path, config):
                 continue
             label    = row.get('label',    '').strip()
             func_key = row.get('function', '').strip()
+            side_val = row.get('side',     '').strip().lower()
 
-            if not label and not func_key:
-                continue  # skip empty rows
+            if not label and not func_key and not side_val:
+                continue
 
             color = color_map.get(func_key, '#888888')
             display_label = label or func_key or f'pin_{number}'
 
-            pins_data.setdefault(number, []).append({
-                'name':  display_label,
-                'color': color,
-            })
+            if number not in pins_data:
+                pins_data[number] = {'functions': [], 'side': None}
+
+            if side_val in ('left', 'right', 'top', 'bottom'):
+                pins_data[number]['side'] = side_val
+
+            if display_label:
+                pins_data[number]['functions'].append({
+                    'name':  display_label,
+                    'color': color,
+                })
 
     return pins_data
 
 
 def generate_template_csv(pins, output_path='pins_template.csv', config=None):
-    """Write a template CSV pre-filled with detected pin numbers."""
+    """Write a template CSV pre-filled with detected pin numbers and sides."""
     func_names = []
     if config:
         func_names = [f['name'] for f in config.get('function', [])]
 
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['number', 'label', 'function'])
+        writer.writerow(['number', 'label', 'function', 'side'])
         for pin in pins:
-            writer.writerow([pin.number, '', ''])
+            writer.writerow([pin.number, '', '', pin.side])
 
     print(f"Template written to: {output_path}")
     print("Fill in 'label' (text shown in the box) and 'function' (colour category).")
@@ -128,7 +134,7 @@ def generate_template_csv(pins, output_path='pins_template.csv', config=None):
 
 
 def build_pinout(input_svg, board_image, output_file, pins_data,
-                 export_png=True, png_dpi=300):
+                 export_png=True, png_dpi=300, sort_pins=True):
     """Core rendering logic, shared between CLI and GUI."""
     tree = ET.parse(input_svg)
     root = tree.getroot()
@@ -137,28 +143,33 @@ def build_pinout(input_svg, board_image, output_file, pins_data,
     svg_height = float(root.attrib.get('height', '100mm').replace('mm', ''))
     svg_size   = (svg_width, svg_height)
 
-    pin_detected = detect_pin(root.iter(), svg_size)
+    pin_detected = detect_pin(root.iter(), svg_size, sort_pins=sort_pins)
     print(f"Detected {len(pin_detected)} pins")
 
-    for idx, pin in enumerate(pin_detected):
-        pin.number    = idx + 1
+    for pin in pin_detected:
         pin.displayed = True
 
-        functions = pins_data.get(pin.number, [])
+        entry = pins_data.get(pin.number, {})
+        functions = entry.get('functions', []) if isinstance(entry, dict) else (entry if isinstance(entry, list) else [])
+        side_override = entry.get('side') if isinstance(entry, dict) else None
+
+        if side_override:
+            pin.side = side_override
+
         if functions:
             for func in functions:
                 pin.add_function(func['name'], func['color'])
         else:
-            # Fallback: plain numbered label
             pin.add_function(f'pin_{pin.number}', '#888888')
 
         add_pin_graphics(root, pin)
 
-    add_board_image(root, board_image, svg_width, svg_height)
+    if board_image and os.path.isfile(board_image):
+        add_board_image(root, board_image, svg_width, svg_height)
 
-    svg.update_bounding_box(root, margin=1)
+    svg.update_bounding_box(root, margin=2)
     prettify_svg(root)
-    tree.write(output_file)
+    ET.ElementTree(root).write(output_file, encoding='utf-8', xml_declaration=True)
     print(f"Pinout saved to: {output_file}")
 
     if export_png:
@@ -181,6 +192,7 @@ def main():
         sys.exit(f"Error: config file not found: {args.config}")
 
     config = save.from_json(args.config)
+    sort_pins = not args.no_sort_pins
 
     # ── Generate template mode ────────────────────────────────────────────────
     if args.generate_template:
@@ -188,9 +200,7 @@ def main():
         root = tree.getroot()
         svg_width  = float(root.attrib.get('width',  '100mm').replace('mm', ''))
         svg_height = float(root.attrib.get('height', '100mm').replace('mm', ''))
-        pins = detect_pin(root.iter(), (svg_width, svg_height))
-        for idx, pin in enumerate(pins):
-            pin.number = idx + 1
+        pins = detect_pin(root.iter(), (svg_width, svg_height), sort_pins=sort_pins)
         generate_template_csv(pins, config=config)
         return
 
@@ -206,7 +216,7 @@ def main():
         print(f"Loaded pin data for {len(pins_data)} pins from {args.pins}")
 
     build_pinout(args.input_svg, args.board_image, args.output, pins_data,
-                 export_png=not args.no_png, png_dpi=args.png_dpi)
+                 export_png=not args.no_png, png_dpi=args.png_dpi, sort_pins=sort_pins)
 
 
 if __name__ == '__main__':
