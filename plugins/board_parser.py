@@ -115,7 +115,7 @@ def _board_bbox_mm(board):
 
 
 def _detect_side(cx, cy, bbox_mm):
-    """Detect 'left', 'right', 'top', or 'bottom' based on board bounding box & pad coordinates."""
+    """Detect 'left', 'right', 'top', or 'bottom' based on board bounding box & coordinates."""
     min_x, min_y, w, h = bbox_mm
     if w <= 0 or h <= 0:
         return 'left'
@@ -125,20 +125,6 @@ def _detect_side(cx, cy, bbox_mm):
 
     rx = cxr / w
     ry = cyr / h
-
-    if w >= h * 1.5:
-        if ry < 0.15:
-            return 'top'
-        elif ry > 0.85:
-            return 'bottom'
-        return 'left' if rx < 0.5 else 'right'
-
-    if h >= w * 1.5:
-        if rx < 0.15:
-            return 'left'
-        elif rx > 0.85:
-            return 'right'
-        return 'top' if ry < 0.5 else 'bottom'
 
     distances = {
         'left':   rx,
@@ -165,13 +151,24 @@ def parse_footprint(footprint, board, rules=None):
     pins = []
     meta = {}
     fp_ref = footprint.GetReference()
+    pads = list(footprint.Pads())
 
-    for idx, pad in enumerate(footprint.Pads(), start=1):
+    if pads:
+        # Determine dominant side from footprint centroid so header pins stay grouped
+        all_cx = [_to_mm(p.GetPosition().x if hasattr(p.GetPosition(), 'x') else p.GetPosition()[0]) for p in pads]
+        all_cy = [_to_mm(p.GetPosition().y if hasattr(p.GetPosition(), 'y') else p.GetPosition()[1]) for p in pads]
+        fp_cx = sum(all_cx) / len(all_cx)
+        fp_cy = sum(all_cy) / len(all_cy)
+        fp_default_side = _detect_side(fp_cx, fp_cy, bbox_mm)
+    else:
+        fp_default_side = 'left'
+
+    for idx, pad in enumerate(pads, start=1):
         pos = pad.GetPosition()
         cx = _to_mm(pos.x) if hasattr(pos, 'x') else _to_mm(pos[0])
         cy = _to_mm(pos.y) if hasattr(pos, 'y') else _to_mm(pos[1])
         r = _pad_radius_mm(pad)
-        side = _detect_side(cx, cy, bbox_mm)
+        side = fp_default_side
         pad_num = pad.GetName() or str(idx)
 
         pin = Pin(cx=cx, cy=cy, r=r, number=idx, side=side, pad_name=pad_num, footprint=fp_ref)

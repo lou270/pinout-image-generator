@@ -354,12 +354,13 @@ def scale_image_to_svg(image_width_mm, image_height_mm, svg_width_mm, svg_height
     return image_width_mm * scale_factor, image_height_mm * scale_factor
 
 
-def _autocrop_transparent(image):
-    """Crop fully-transparent borders from an RGBA image."""
+def _autocrop_transparent(image, alpha_threshold=25):
+    """Crop transparent and faint shadow borders from an RGBA image."""
     if image.mode not in ('RGBA', 'LA'):
         return image
     alpha = image.split()[-1]
-    bbox = alpha.getbbox()
+    mask = alpha.point(lambda p: 255 if p > alpha_threshold else 0)
+    bbox = mask.getbbox()
     if bbox is None or bbox == (0, 0, image.size[0], image.size[1]):
         return image
     return image.crop(bbox)
