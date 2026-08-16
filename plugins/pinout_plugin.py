@@ -24,9 +24,15 @@ from function import render_pinout
 
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-ICON_PATH  = os.path.join(os.path.dirname(PLUGIN_DIR), 'resources', 'icon.png')
-if not os.path.isfile(ICON_PATH):
-    ICON_PATH = os.path.join(PLUGIN_DIR, 'resources', 'icon.png')
+ICON_PATH = ''
+for _cand in [
+    os.path.join(PLUGIN_DIR, 'icon.png'),
+    os.path.join(PLUGIN_DIR, 'resources', 'icon.png'),
+    os.path.join(os.path.dirname(PLUGIN_DIR), 'resources', 'icon.png'),
+]:
+    if os.path.isfile(_cand):
+        ICON_PATH = _cand
+        break
 CONFIG_PATH = os.path.join(PLUGIN_DIR, 'config.json')
 
 
