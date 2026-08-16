@@ -21,8 +21,10 @@ except ImportError:
     pcbnew = None
 
 
-# Expanded connector / pin header regex pattern (case-insensitive)
-DEFAULT_CONNECTOR_PATTERN = r'^(J|CN|P|HDR|CONN|PIN|MOD|U|EXT|EXP|HEADER)\d*'
+# Connector / pin header regex pattern (matches J1, CN1, P1, HDR1, CONN1, HEADER1)
+# Note: 'U' and 'MOD' (ICs and modules) are excluded from the default connector pattern
+# so IC pins (e.g. 32-pin / 48-pin MCUs) are not lumped into connector pinouts by default.
+DEFAULT_CONNECTOR_PATTERN = r'^(J|CN|P|HDR|CONN|HEADER)\d*'
 
 
 def _to_mm(value_nm):
@@ -62,6 +64,25 @@ def list_footprints(board):
     if pcbnew is None and not hasattr(board, 'GetFootprints'):
         raise RuntimeError('pcbnew is not available — this function must run inside KiCad or with a valid board object.')
     return [(fp.GetReference(), fp) for fp in board.GetFootprints()]
+
+
+def get_board_footprint_info(board, pattern=DEFAULT_CONNECTOR_PATTERN):
+    """Return list of dicts describing all footprints with pads on the board."""
+    fps = list_footprints(board)
+    info = []
+    for ref, fp in fps:
+        pad_count = len(list(fp.Pads()))
+        if pad_count == 0:
+            continue
+        is_sel = getattr(fp, 'IsSelected', lambda: False)()
+        is_conn = bool(re.match(pattern, ref, re.IGNORECASE))
+        info.append({
+            'ref': ref,
+            'pad_count': pad_count,
+            'selected': is_sel,
+            'is_connector': is_conn,
+        })
+    return info
 
 
 def get_candidate_footprints(board, pattern=DEFAULT_CONNECTOR_PATTERN):
@@ -177,7 +198,7 @@ def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR
 
     Args:
         board: pcbnew.BOARD instance or duck-typed board object.
-        footprint_ref: str (e.g. 'J1'), list of str, or None to match pattern.
+        footprint_ref: str (e.g. 'J1'), list of str, or None (checks selected, then pattern).
         rules: pre-loaded netclass_map rules or None.
         pattern: regex pattern to match connector references when footprint_ref is None.
 
@@ -200,10 +221,15 @@ def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR
             target_refs = set(footprint_ref)
         fps = [fp for ref, fp in all_fps if ref in target_refs]
     else:
-        fps = [fp for ref, fp in all_fps if re.match(pattern, ref, re.IGNORECASE)]
-        if not fps:
-            # Fallback to all footprints with pads
-            fps = [fp for ref, fp in all_fps if len(list(fp.Pads())) > 0]
+        # Check if any footprints are currently selected in KiCad editor
+        selected_fps = [fp for _, fp in all_fps if getattr(fp, 'IsSelected', lambda: False)()]
+        if selected_fps:
+            fps = selected_fps
+        else:
+            fps = [fp for ref, fp in all_fps if re.match(pattern, ref, re.IGNORECASE)]
+            if not fps:
+                # Fallback to all footprints with pads
+                fps = [fp for ref, fp in all_fps if len(list(fp.Pads())) > 0]
 
     all_pins, all_meta = [], {}
     offset = 0

@@ -6,8 +6,9 @@
 """wxPython dialog for reviewing/editing detected pins before rendering.
 
 Grid columns: #, X (mm), Y (mm), Side, Label, Function, Show.
-Users can add / remove rows, edit any cell, define multiple functions per pin
-(either via comma separation or multiple rows per pin), and choose the output path.
+Users can filter by footprint, add / remove rows, edit any cell,
+define multiple functions per pin (via comma separation or stacked rows),
+and choose the output path.
 """
 
 import json
@@ -19,6 +20,7 @@ try:
 except ImportError:
     wx = None
 
+import board_parser
 import save as save_mod
 from Pin import Pin
 
@@ -29,19 +31,37 @@ COLS = ('#', 'X (mm)', 'Y (mm)', 'Side', 'Label', 'Function', 'Show')
 class PinoutDialog(wx.Dialog if wx else object):
 
     def __init__(self, parent, pins, meta, svg_size_mm, board_image_path,
-                 function_names, default_output):
+                 function_names, default_output, board=None):
         if not wx:
             raise RuntimeError("wxPython is required to display PinoutDialog")
 
-        super().__init__(parent, title='Pinout Maker', size=(860, 540),
+        super().__init__(parent, title='Pinout Maker', size=(880, 580),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
+        self._board          = board
         self._function_names = list(function_names)
         self._svg_size_mm    = svg_size_mm
         self._board_image    = board_image_path
 
         panel   = wx.Panel(self)
         sizer   = wx.BoxSizer(wx.VERTICAL)
+
+        # ── Footprint / Connector selector ────────────────────────────────────
+        if self._board is not None:
+            fp_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            fp_sizer.Add(wx.StaticText(panel, label='Target Connector / Footprint:'),
+                         0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+
+            self.fp_choice = wx.Choice(panel)
+            self._fp_items = self._populate_footprint_choices()
+            for label, _ in self._fp_items:
+                self.fp_choice.Append(label)
+            if self.fp_choice.GetCount() > 0:
+                self.fp_choice.SetSelection(0)
+            self.fp_choice.Bind(wx.EVT_CHOICE, self._on_footprint_changed)
+
+            fp_sizer.Add(self.fp_choice, 1, wx.EXPAND | wx.RIGHT, 6)
+            sizer.Add(fp_sizer, 0, wx.EXPAND | wx.ALL, 6)
 
         # ── Header instructions ───────────────────────────────────────────────
         help_text = wx.StaticText(
@@ -50,7 +70,7 @@ class PinoutDialog(wx.Dialog if wx else object):
                   '(e.g. Label: "TX, GPIO5" | Function: "UART, GPIO/PWM") or on separate rows.'
         )
         help_text.SetForegroundColour(wx.Colour(100, 100, 100))
-        sizer.Add(help_text, 0, wx.ALL, 6)
+        sizer.Add(help_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # ── Grid ──────────────────────────────────────────────────────────────
         self.grid = wx.grid.Grid(panel)
@@ -65,16 +85,7 @@ class PinoutDialog(wx.Dialog if wx else object):
         self.grid.SetColSize(5, 170)
         self.grid.SetColSize(6, 50)
 
-        for pin in pins:
-            info = meta.get(pin.number, {})
-            self._append_row(
-                number=pin.number,
-                x=pin.cx,
-                y=pin.cy,
-                side=pin.side,
-                label=info.get('net_name', ''),
-                function=info.get('suggested_function', ''),
-            )
+        self._populate_grid(pins, meta)
 
         sizer.Add(self.grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
@@ -110,7 +121,55 @@ class PinoutDialog(wx.Dialog if wx else object):
 
         panel.SetSizer(sizer)
 
+    # ── Footprint selection helpers ───────────────────────────────────────────
+
+    def _populate_footprint_choices(self):
+        """Return list of (display_label, ref_or_none)."""
+        items = []
+        try:
+            info_list = board_parser.get_board_footprint_info(self._board)
+        except Exception:
+            info_list = []
+
+        if not info_list:
+            return [('All detected connectors', None)]
+
+        # Connectors first
+        conn_fps = [f for f in info_list if f['is_connector']]
+        other_fps = [f for f in info_list if not f['is_connector']]
+
+        items.append(('All detected connectors', None))
+        for f in conn_fps:
+            items.append((f"{f['ref']} ({f['pad_count']} pads)", f['ref']))
+        for f in other_fps:
+            items.append((f"{f['ref']} ({f['pad_count']} pads)", f['ref']))
+
+        return items
+
+    def _on_footprint_changed(self, _event):
+        sel = self.fp_choice.GetSelection()
+        if sel < 0 or sel >= len(self._fp_items):
+            return
+        _, target_ref = self._fp_items[sel]
+        pins, meta, _ = board_parser.parse_board(self._board, footprint_ref=target_ref)
+        self._populate_grid(pins, meta)
+
     # ── Grid helpers ──────────────────────────────────────────────────────────
+
+    def _populate_grid(self, pins, meta):
+        if self.grid.GetNumberRows() > 0:
+            self.grid.DeleteRows(0, self.grid.GetNumberRows())
+
+        for pin in pins:
+            info = meta.get(pin.number, {})
+            self._append_row(
+                number=pin.number,
+                x=pin.cx,
+                y=pin.cy,
+                side=pin.side,
+                label=info.get('net_name', ''),
+                function=info.get('suggested_function', ''),
+            )
 
     def _append_row(self, number=0, x=0.0, y=0.0, side='left', label='', function=''):
         row = self.grid.GetNumberRows()
@@ -143,8 +202,8 @@ class PinoutDialog(wx.Dialog if wx else object):
 
     def _on_browse(self, _event):
         with wx.FileDialog(self, 'Save pinout SVG',
-                           wildcard='SVG files (*.svg)|*.svg',
-                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+                            wildcard='SVG files (*.svg)|*.svg',
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
                 self.out_ctrl.SetValue(dlg.GetPath())
 

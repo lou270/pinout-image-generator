@@ -94,7 +94,7 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
 
         # Show the edit dialog.
         dlg = dialog.PinoutDialog(None, pins, meta, svg_size_mm,
-                                  board_image, function_names, default_out)
+                                  board_image, function_names, default_out, board=board)
         if dlg.ShowModal() != wx.ID_OK:
             dlg.Destroy()
             return
