@@ -68,14 +68,14 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', default=str(DEFAULT_OUT))
     parser.add_argument('--download-url-base',
                         help='Override the download_url host (used in CI on a tag)')
     parser.add_argument('--tag',
                         help='Git tag name (e.g. v1.0.0) to synchronize version and URL')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -92,31 +92,54 @@ def main():
     else:
         tag_name = f"v{version_entry['version']}"
 
-    version_entry['install_size'] = install_size
-    version_entry['download_size'] = 0
-    version_entry['download_sha256'] = '0' * 64
+    # Inside the zip package, metadata must have version/status/kicad_version
+    # but MUST NOT have download_* or install_size fields.
+    pkg_metadata = {
+        k: v for k, v in metadata.items() if k != 'versions'
+    }
+    pkg_version = {
+        'version': version_entry['version'],
+        'status': version_entry.get('status', 'stable'),
+        'kicad_version': version_entry.get('kicad_version', '8.0'),
+    }
+    if 'kicad_version_max' in version_entry:
+        pkg_version['kicad_version_max'] = version_entry['kicad_version_max']
+    if 'platforms' in version_entry:
+        pkg_version['platforms'] = version_entry['platforms']
+    pkg_metadata['versions'] = [pkg_version]
+
+    # Write zip with clean packaged metadata.
+    write_zip(zip_path, pkg_metadata)
+
+    # Repository sidecar metadata (contains download_* and install_size).
+    repo_metadata = {
+        k: v for k, v in metadata.items() if k != 'versions'
+    }
+    repo_version = dict(pkg_version)
+    repo_version['install_size'] = install_size
+    repo_version['download_size'] = zip_path.stat().st_size
+    repo_version['download_sha256'] = sha256_of(zip_path)
     if args.download_url_base:
-        version_entry['download_url'] = (
+        repo_version['download_url'] = (
             f'{args.download_url_base.rstrip("/")}/{tag_name}/{IDENTIFIER}.zip'
         )
+    elif 'download_url' in version_entry:
+        repo_version['download_url'] = version_entry['download_url']
+    else:
+        repo_version['download_url'] = (
+            f'https://github.com/lou270/pinout-image-generator/releases/download/{tag_name}/{IDENTIFIER}.zip'
+        )
+    repo_metadata['versions'] = [repo_version]
 
-    # Pass 1: write zip with placeholder hash.
-    write_zip(zip_path, metadata)
-
-    # Pass 2: compute actual hash + size of the written zip, then rewrite.
-    version_entry['download_size'] = zip_path.stat().st_size
-    version_entry['download_sha256'] = sha256_of(zip_path)
-    write_zip(zip_path, metadata)
-
-    # Also write an updated metadata.json alongside for repository publishing.
+    # Write sidecar metadata.json
     sidecar = out_dir / 'metadata.json'
-    sidecar.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+    sidecar.write_text(json.dumps(repo_metadata, indent=2) + '\n', encoding='utf-8')
 
     print(f'Built: {zip_path}')
-    print(f'  version:         {version_entry["version"]}')
+    print(f'  version:         {repo_version["version"]}')
     print(f'  install_size:    {install_size}')
-    print(f'  download_size:   {version_entry["download_size"]}')
-    print(f'  download_sha256: {version_entry["download_sha256"]}')
+    print(f'  download_size:   {repo_version["download_size"]}')
+    print(f'  download_sha256: {repo_version["download_sha256"]}')
     print(f'Sidecar metadata: {sidecar}')
 
 
