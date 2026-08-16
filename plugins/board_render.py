@@ -6,7 +6,8 @@
 """Render a top-view PNG of the active board.
 
 Tries three strategies, in order:
-  1. Subprocess call to `kicad-cli pcb render --side top --background transparent --quality basic` (KiCad 8+).
+  1. Subprocess call to `kicad-cli pcb render --side top --background transparent --quality basic` (KiCad 8+),
+     with 3D models for DNP (Do Not Populate) components hidden.
   2. Subprocess call to `kicad-cli pcb export svg` (KiCad 8+) + rasterisation.
   3. pcbnew.PLOT_CONTROLLER → SVG → rasterise with cairosvg.
   4. Return None so the caller can prompt the user for a PNG manually.
@@ -29,6 +30,15 @@ try:
     import cairosvg
 except Exception:
     cairosvg = None
+
+
+def _is_dnp(fp):
+    """Check if footprint has the 'Do not populate' (DNP) attribute set."""
+    if hasattr(fp, 'IsDNP'):
+        return bool(fp.IsDNP())
+    if hasattr(fp, 'GetDNP'):
+        return bool(fp.GetDNP())
+    return False
 
 
 def find_kicad_cli():
@@ -94,13 +104,41 @@ def _clean_rendered_png(png_path, alpha_threshold=25):
         pass
 
 
+def _prepare_render_board(board):
+    """Save a temporary board file where 3D models of DNP components are hidden."""
+    if pcbnew is None or not hasattr(board, 'GetFootprints'):
+        return None, False
+
+    dnp_models = []
+    has_dnp = False
+    for fp in board.GetFootprints():
+        if _is_dnp(fp):
+            has_dnp = True
+            for model in fp.Models():
+                if getattr(model, 'm_Show', True):
+                    dnp_models.append(model)
+                    model.m_Show = False
+
+    if not has_dnp:
+        return (board.GetFileName() if hasattr(board, 'GetFileName') else None), False
+
+    tmp_pcb = _tempfile('.kicad_pcb')
+    try:
+        pcbnew.SaveBoard(tmp_pcb, board)
+    finally:
+        # Restore in-memory model visibility immediately
+        for model in dnp_models:
+            model.m_Show = True
+
+    return tmp_pcb, True
+
+
 def _kicad_cli_render(board_path, out_png):
     """Render board top-view with transparent background using kicad-cli 3D renderer."""
     exe = find_kicad_cli()
     if not exe:
         return None
 
-    # Note: we use --quality basic to avoid 3D floor shadows that distort board bounds
     cmd = [
         exe, 'pcb', 'render',
         '--side', 'top',
@@ -132,6 +170,7 @@ def _kicad_cli_export_svg(board_path, out_png):
         '--page-size-mode', '2',
         '--fit-page-to-board',
         '--exclude-drawing-sheet',
+        '--hide-DNP-footprints-on-fab-layers',
         '--layers', 'Edge.Cuts,F.Mask,F.Cu,F.SilkS',
         '--mode-single',
         '-o', svg_tmp,
@@ -168,6 +207,8 @@ def _plot_to_svg(board, out_svg):
     opts.SetPlotFrameRef(False)
     opts.SetUseAuxOrigin(False)
     opts.SetDrillMarksType(getattr(pcbnew, 'DRILL_MARKS_NO_DRILL_SHAPE', 0))
+    if hasattr(opts, 'SetHideDNPFPsOnFabLayers'):
+        opts.SetHideDNPFPsOnFabLayers(True)
 
     layers = [
         ('Edge.Cuts', getattr(pcbnew, 'Edge_Cuts', 44)),
@@ -214,34 +255,48 @@ def _svg_to_png(in_svg, out_png, target_width_px=2000):
 
 
 def render_top_view(board):
-    """Produce a top-view PNG of the board. Returns path or None if all strategies failed."""
+    """Produce a top-view PNG of the board with DNP 3D models hidden.
+    
+    Returns path to PNG or None if all strategies failed.
+    """
     out_png = _tempfile('.png')
-    board_path = board.GetFileName() if (pcbnew and board) else None
 
-    # Strategy 1: kicad-cli 3D render with transparent background & basic quality (no floor shadow)
-    if board_path and os.path.isfile(board_path):
-        result = _kicad_cli_render(board_path, out_png)
-        if result:
-            return result
+    # Prepare board (hiding DNP 3D models if any DNP components exist)
+    render_pcb_path, is_temp = _prepare_render_board(board) if board else (None, False)
+    if not render_pcb_path and board and hasattr(board, 'GetFileName'):
+        render_pcb_path = board.GetFileName()
 
-        # Strategy 2: kicad-cli export svg
-        result = _kicad_cli_export_svg(board_path, out_png)
-        if result:
-            return result
+    try:
+        # Strategy 1: kicad-cli 3D render with transparent background & basic quality
+        if render_pcb_path and os.path.isfile(render_pcb_path):
+            result = _kicad_cli_render(render_pcb_path, out_png)
+            if result:
+                return result
 
-    # Strategy 3: plot SVG via pcbnew PLOT_CONTROLLER
-    if pcbnew is not None and board:
-        svg_tmp = _tempfile('.svg')
-        try:
-            produced_svg = _plot_to_svg(board, svg_tmp)
-            if produced_svg and _svg_to_png(produced_svg, out_png):
-                return out_png
-        finally:
-            if os.path.isfile(svg_tmp):
-                try:
-                    os.unlink(svg_tmp)
-                except OSError:
-                    pass
+            # Strategy 2: kicad-cli export svg
+            result = _kicad_cli_export_svg(render_pcb_path, out_png)
+            if result:
+                return result
+
+        # Strategy 3: plot SVG via pcbnew PLOT_CONTROLLER
+        if pcbnew is not None and board:
+            svg_tmp = _tempfile('.svg')
+            try:
+                produced_svg = _plot_to_svg(board, svg_tmp)
+                if produced_svg and _svg_to_png(produced_svg, out_png):
+                    return out_png
+            finally:
+                if os.path.isfile(svg_tmp):
+                    try:
+                        os.unlink(svg_tmp)
+                    except OSError:
+                        pass
+    finally:
+        if is_temp and render_pcb_path and os.path.isfile(render_pcb_path):
+            try:
+                os.unlink(render_pcb_path)
+            except OSError:
+                pass
 
     # Strategy 4: give up — caller prompts user
     if os.path.isfile(out_png):

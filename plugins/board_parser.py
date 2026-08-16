@@ -209,7 +209,7 @@ def parse_footprint(footprint, board, rules=None):
     return pins, meta
 
 
-def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=False):
+def parse_board(board, footprint_ref=None, rules=None, pattern=DEFAULT_CONNECTOR_PATTERN, include_dnp=True):
     """Extract pins from specified footprint(s) or all detected connector footprints.
 
     Args:
