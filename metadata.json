@@ -3,7 +3,7 @@
   "name": "Pinout Maker",
   "description": "Generate an annotated pinout SVG from the active board.",
   "description_full": "Pinout Maker extracts pad positions, net names and net classes from the currently-open board and produces a coloured pinout diagram overlaid on a top-view render. Labels and function categories can be fully edited before rendering. A separate CLI and Tkinter GUI are also available for workflows that start from a gerber F.Mask SVG and a custom PNG.",
-  "identifier": "com.lou270.pinout_maker",
+  "identifier": "com.lou270.pinout-maker",
   "type": "plugin",
   "author": {
     "name": "Louis Barbier",
@@ -19,9 +19,9 @@
   "versions": [
     {
       "version": "1.0",
-      "status": "development",
+      "status": "stable",
       "kicad_version": "8.0",
-      "download_url": "https://github.com/lou270/pinout-maker/releases/latest/download/com.lou270.pinout_maker.zip",
+      "download_url": "https://github.com/lou270/pinout-maker/releases/latest/download/com.lou270.pinout-maker.zip",
       "download_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "download_size": 0,
       "install_size": 0

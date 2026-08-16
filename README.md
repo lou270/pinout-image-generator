@@ -29,7 +29,7 @@ Generate annotated, publication-ready pinout diagrams (SVG & PNG) for PCBs. Work
 
 ### Manual install (KiCad 7, 8, 9+)
 
-1. Download `com.lou270.pinout_maker.zip` from the [Releases](https://github.com/lou270/pinout-maker/releases) page.
+1. Download `com.lou270.pinout-maker.zip` from the [Releases](https://github.com/lou270/pinout-maker/releases) page.
 2. KiCad → *Plugin and Content Manager* → *Install from file* → select the zip.
 
 ### Using in KiCad
