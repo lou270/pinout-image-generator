@@ -7,7 +7,7 @@ Produces dist/com.lou270.pinout_maker.zip containing:
   - resources/     (icon)
 
 Usage:
-  python scripts/build_pcm_package.py [--output-dir dist]
+  python scripts/build_pcm_package.py [--output-dir dist] [--tag v1.0.0]
 """
 
 import argparse
@@ -73,6 +73,8 @@ def main():
     parser.add_argument('--output-dir', default=str(DEFAULT_OUT))
     parser.add_argument('--download-url-base',
                         help='Override the download_url host (used in CI on a tag)')
+    parser.add_argument('--tag',
+                        help='Git tag name (e.g. v1.0.0) to synchronize version and URL')
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -83,17 +85,19 @@ def main():
     metadata = json.loads((ROOT / 'metadata.json').read_text(encoding='utf-8'))
     install_size = compute_install_size()
 
-    # First pass: write the zip with placeholder size/sha to measure download size
-    # (we need the actual compressed zip to compute sha256, but the sha256 is stored
-    # inside metadata.json which is inside the zip — so we do it in two passes).
     version_entry = metadata['versions'][0]
+    if args.tag:
+        tag_name = args.tag
+        version_entry['version'] = tag_name.lstrip('v')
+    else:
+        tag_name = f"v{version_entry['version']}"
+
     version_entry['install_size'] = install_size
     version_entry['download_size'] = 0
     version_entry['download_sha256'] = '0' * 64
     if args.download_url_base:
-        version = version_entry['version']
         version_entry['download_url'] = (
-            f'{args.download_url_base.rstrip("/")}/v{version}/{IDENTIFIER}.zip'
+            f'{args.download_url_base.rstrip("/")}/{tag_name}/{IDENTIFIER}.zip'
         )
 
     # Pass 1: write zip with placeholder hash.
@@ -109,6 +113,7 @@ def main():
     sidecar.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 
     print(f'Built: {zip_path}')
+    print(f'  version:         {version_entry["version"]}')
     print(f'  install_size:    {install_size}')
     print(f'  download_size:   {version_entry["download_size"]}')
     print(f'  download_sha256: {version_entry["download_sha256"]}')
