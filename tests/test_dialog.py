@@ -88,6 +88,26 @@ class TestDialogModule(unittest.TestCase):
         self.assertEqual(pins[2].functions[1]['name'], 'ADC1')
         self.assertEqual(pins[2].functions[1]['color'], '#427F21')
 
+    def test_dialog_export_and_apply_config(self):
+        dlg = object.__new__(PinoutDialog)
+        dlg.out_ctrl = MockTextCtrl("/path/to/output.svg")
+        dlg._meta = {
+            1: {'pad_name': '1', 'footprint': 'J1'},
+            2: {'pad_name': '2', 'footprint': 'J1'},
+        }
+        dlg.grid = MockGrid([
+            ['1', '10.0', '20.0', 'left', 'VCC', 'Power', '1'],
+            ['2', '10.0', '30.0', 'left', 'GND', 'Ground', '1'],
+        ])
+
+        exported = PinoutDialog.export_config_dict(dlg)
+        self.assertEqual(exported['output_path'], "/path/to/output.svg")
+        self.assertEqual(len(exported['pins']), 2)
+        self.assertEqual(exported['pins'][0]['label'], 'VCC')
+        self.assertEqual(exported['pins'][0]['pad_name'], '1')
+        self.assertEqual(exported['pins'][0]['footprint'], 'J1')
+
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -360,60 +360,123 @@ class PinoutGUI(tk.Tk):
 
     # ── Config import / export ────────────────────────────────────────────────
 
+    def _auto_load_config_for_svg(self, svg_path):
+        """Auto-load matching _pinout_config.json if found."""
+        if not svg_path:
+            return
+        cfg_path = save_mod.get_default_config_path(svg_path)
+        if cfg_path and os.path.isfile(cfg_path):
+            self._import_config_file(cfg_path, silent=True)
+
     def _import_config(self):
-        path = filedialog.askopenfilename(filetypes=[('CSV files', '*.csv'), ('All', '*.*')])
-        if not path or not os.path.isfile(path):
+        path = filedialog.askopenfilename(
+            filetypes=[('Configuration / CSV', '*.json;*.csv'),
+                       ('JSON config', '*.json'),
+                       ('CSV files', '*.csv'),
+                       ('All', '*.*')])
+        if not path:
             return
-        if not self._pin_rows:
-            self._detect_pins()
-        if not self._pin_rows:
-            return
-        try:
-            pins_data = load_pins_csv(path, self._config)
-        except Exception as exc:
-            messagebox.showerror('CSV error', str(exc))
-            return
-        for pin_number, data in pins_data.items():
-            if pin_number not in self._pin_rows:
-                continue
-            row = self._pin_rows[pin_number]
-            for w in list(row._container.winfo_children()):
-                w.destroy()
-            funcs = data.get('functions', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            row.populate(funcs)
-            if isinstance(data, dict) and data.get('side'):
-                row.side_var.set(data['side'])
-        self._status.set(f'Config imported: {os.path.basename(path)}')
+        self._import_config_file(path, silent=False)
+
+    def _import_config_file(self, path, silent=False):
+        if path.lower().endswith('.json'):
+            cfg = save_mod.load_pinout_config(path)
+            if not cfg or 'pins' not in cfg:
+                if not silent:
+                    messagebox.showerror('Import error', 'Invalid JSON configuration format.')
+                return
+            if not self._pin_rows:
+                self._detect_pins()
+
+            current_rows = {n: self._pin_rows[n] for n in self._pin_rows}
+            for p in cfg.get('pins', []):
+                num = p.get('number')
+                if num in current_rows:
+                    row = current_rows[num]
+                    row.side_var.set(p.get('side', 'left'))
+                    lbl = p.get('label', '')
+                    func = p.get('function', '')
+                    if lbl or func:
+                        row.populate([{'name': lbl, 'function': func}])
+            if not silent:
+                self._status.set(f'Loaded config: {os.path.basename(path)}')
+        else:
+            try:
+                pins_data = load_pins_csv(path, self._config)
+            except Exception as exc:
+                if not silent:
+                    messagebox.showerror('Import error', str(exc))
+                return
+
+            if not self._pin_rows:
+                self._detect_pins()
+
+            for pin_number, data in pins_data.items():
+                if pin_number in self._pin_rows:
+                    row = self._pin_rows[pin_number]
+                    if data.get('side'):
+                        row.side_var.set(data['side'])
+                    row.populate(data.get('functions', []))
+
+            if not silent:
+                self._status.set(f'Imported config from: {os.path.basename(path)}')
 
     def _save_config(self):
         if not self._pin_rows:
-            messagebox.showinfo('Info', 'Detect pins first.')
+            messagebox.showinfo('Info', 'Nothing to export. Detect pins first.')
             return
+        default_name = os.path.splitext(os.path.basename(self._svg_var.get() or 'pins'))[0] + '_pinout_config.json'
         path = filedialog.asksaveasfilename(
-            defaultextension='.csv', initialfile='pins_config.csv',
-            filetypes=[('CSV files', '*.csv'), ('All', '*.*')])
+            defaultextension='.json', initialfile=default_name,
+            filetypes=[('JSON configuration', '*.json'), ('CSV files', '*.csv'), ('All', '*.*')])
         if not path:
             return
-        import csv as _csv
-        try:
-            with open(path, 'w', newline='', encoding='utf-8') as f:
-                writer = _csv.writer(f)
-                writer.writerow(['number', 'label', 'function', 'side'])
-                for pin_number in sorted(self._pin_rows):
-                    row = self._pin_rows[pin_number]
-                    funcs = row.get_functions()
-                    side = row.side_var.get()
-                    if funcs:
-                        for func in funcs:
-                            writer.writerow([pin_number,
-                                             func.get('name', ''),
-                                             func.get('function', ''),
-                                             side])
-                    else:
-                        writer.writerow([pin_number, '', '', side])
-        except Exception as exc:
-            messagebox.showerror('Export error', str(exc))
-            return
+
+        if path.lower().endswith('.json'):
+            pins_data = []
+            for num in sorted(self._pin_rows):
+                row = self._pin_rows[num]
+                funcs = row.get_functions()
+                lbl = ', '.join([f.get('name', '') for f in funcs]) if funcs else ''
+                fn = ', '.join([f.get('function', '') for f in funcs]) if funcs else ''
+                matching = [p for p in self._detected_pins if p.number == num]
+                px = matching[0].cx if matching else 0.0
+                py = matching[0].cy if matching else 0.0
+                pins_data.append({
+                    'number': num,
+                    'x': round(px, 3),
+                    'y': round(py, 3),
+                    'side': row.side_var.get(),
+                    'label': lbl,
+                    'function': fn,
+                    'show': True,
+                })
+            save_mod.save_pinout_config(path, {
+                'version': '1.0',
+                'output_path': self._out_var.get(),
+                'pins': pins_data,
+            })
+        else:
+            import csv as _csv
+            try:
+                with open(path, 'w', newline='', encoding='utf-8') as f:
+                    writer = _csv.writer(f)
+                    writer.writerow(['number', 'label', 'function', 'side'])
+                    for pin_number in sorted(self._pin_rows):
+                        row = self._pin_rows[pin_number]
+                        funcs = row.get_functions()
+                        side = row.side_var.get()
+                        if funcs:
+                            for func in funcs:
+                                writer.writerow([pin_number,
+                                                 func.get('name', ''),
+                                                 func.get('function', ''),
+                                                 side])
+                        else:
+                            writer.writerow([pin_number, '', '', side])
+            except Exception as exc:
+                messagebox.showerror('Export error', str(exc))
+                return
         self._status.set(f'Config saved: {os.path.basename(path)}')
 
     def _export_template(self):

@@ -6,9 +6,12 @@
 """wxPython dialog for reviewing/editing detected pins before rendering.
 
 Grid columns: #, X (mm), Y (mm), Side, Label, Function, Show.
-Users can filter by footprint, add / remove rows, edit any cell,
-define multiple functions per pin (via comma separation or stacked rows),
-and choose the output path.
+Features:
+  - Automatic loading of existing *_pinout_config.json configurations.
+  - Automatic saving of configuration upon clicking 'Generate'.
+  - Manual 'Save Config…' and 'Load Config…' buttons.
+  - Footprint / connector filtering dropdown.
+  - Multi-function definitions (comma-separated or stacked rows).
 """
 
 import json
@@ -31,17 +34,28 @@ COLS = ('#', 'X (mm)', 'Y (mm)', 'Side', 'Label', 'Function', 'Show')
 class PinoutDialog(wx.Dialog if wx else object):
 
     def __init__(self, parent, pins, meta, svg_size_mm, board_image_path,
-                 function_names, default_output, board=None):
+                 function_names, default_output, board=None, config_path=None):
         if not wx:
             raise RuntimeError("wxPython is required to display PinoutDialog")
 
-        super().__init__(parent, title='Pinout Image Generator', size=(880, 580),
+        super().__init__(parent, title='Pinout Image Generator', size=(900, 600),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self._board          = board
         self._function_names = list(function_names)
         self._svg_size_mm    = svg_size_mm
         self._board_image    = board_image_path
+        self._meta           = dict(meta) if meta else {}
+
+        # Default configuration path
+        if config_path:
+            self._config_path = config_path
+        elif self._board and hasattr(self._board, 'GetFileName') and self._board.GetFileName():
+            self._config_path = save_mod.get_default_config_path(self._board.GetFileName())
+        elif default_output:
+            self._config_path = save_mod.get_default_config_path(default_output)
+        else:
+            self._config_path = None
 
         panel   = wx.Panel(self)
         sizer   = wx.BoxSizer(wx.VERTICAL)
@@ -63,14 +77,20 @@ class PinoutDialog(wx.Dialog if wx else object):
             fp_sizer.Add(self.fp_choice, 1, wx.EXPAND | wx.RIGHT, 6)
             sizer.Add(fp_sizer, 0, wx.EXPAND | wx.ALL, 6)
 
-        # ── Header instructions ───────────────────────────────────────────────
+        # ── Header instructions & status ──────────────────────────────────────
+        header_sizer = wx.BoxSizer(wx.VERTICAL)
         help_text = wx.StaticText(
             panel,
             label='Tip: Multiple functions on a pin can be entered separated by commas '
                   '(e.g. Label: "TX, GPIO5" | Function: "UART, GPIO/PWM") or on separate rows.'
         )
         help_text.SetForegroundColour(wx.Colour(100, 100, 100))
-        sizer.Add(help_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        header_sizer.Add(help_text, 0, wx.BOTTOM, 2)
+
+        self.status_lbl = wx.StaticText(panel, label='')
+        self.status_lbl.SetForegroundColour(wx.Colour(0, 120, 200))
+        header_sizer.Add(self.status_lbl, 0)
+        sizer.Add(header_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # ── Grid ──────────────────────────────────────────────────────────────
         self.grid = wx.grid.Grid(panel)
@@ -89,15 +109,24 @@ class PinoutDialog(wx.Dialog if wx else object):
 
         sizer.Add(self.grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
-        # ── Row buttons ───────────────────────────────────────────────────────
+        # ── Row & Config buttons ──────────────────────────────────────────────
         row_btns = wx.BoxSizer(wx.HORIZONTAL)
         add_btn  = wx.Button(panel, label='Add pin')
         rm_btn   = wx.Button(panel, label='Remove selected')
+        load_btn = wx.Button(panel, label='Load Config…')
+        save_btn = wx.Button(panel, label='Save Config…')
+
         add_btn.Bind(wx.EVT_BUTTON, self._on_add)
         rm_btn .Bind(wx.EVT_BUTTON, self._on_remove)
+        load_btn.Bind(wx.EVT_BUTTON, self._on_load_config_btn)
+        save_btn.Bind(wx.EVT_BUTTON, self._on_save_config_btn)
+
         row_btns.Add(add_btn, 0, wx.RIGHT, 6)
-        row_btns.Add(rm_btn,  0)
-        sizer.Add(row_btns, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        row_btns.Add(rm_btn,  0, wx.RIGHT, 12)
+        row_btns.AddStretchSpacer()
+        row_btns.Add(load_btn, 0, wx.RIGHT, 6)
+        row_btns.Add(save_btn, 0)
+        sizer.Add(row_btns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
 
         # ── Output path ───────────────────────────────────────────────────────
         out_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -121,6 +150,10 @@ class PinoutDialog(wx.Dialog if wx else object):
 
         panel.SetSizer(sizer)
 
+        # ── Automatic config load on startup ──────────────────────────────────
+        if self._config_path and os.path.isfile(self._config_path):
+            self.load_config_file(self._config_path, silent=True)
+
     # ── Footprint selection helpers ───────────────────────────────────────────
 
     def _populate_footprint_choices(self):
@@ -134,7 +167,6 @@ class PinoutDialog(wx.Dialog if wx else object):
         if not info_list:
             return [('All detected connectors', None)]
 
-        # Connectors first
         conn_fps = [f for f in info_list if f['is_connector']]
         other_fps = [f for f in info_list if not f['is_connector']]
 
@@ -154,6 +186,7 @@ class PinoutDialog(wx.Dialog if wx else object):
             return
         _, target_ref = self._fp_items[sel]
         pins, meta, _ = board_parser.parse_board(self._board, footprint_ref=target_ref)
+        self._meta = dict(meta)
         self._populate_grid(pins, meta)
 
     # ── Grid helpers ──────────────────────────────────────────────────────────
@@ -173,7 +206,7 @@ class PinoutDialog(wx.Dialog if wx else object):
                 function=info.get('suggested_function', ''),
             )
 
-    def _append_row(self, number=0, x=0.0, y=0.0, side='left', label='', function=''):
+    def _append_row(self, number=0, x=0.0, y=0.0, side='left', label='', function='', show=True):
         row = self.grid.GetNumberRows()
         self.grid.AppendRows(1)
         self.grid.SetCellValue(row, 0, str(number))
@@ -186,7 +219,7 @@ class PinoutDialog(wx.Dialog if wx else object):
         self.grid.SetCellValue(row, 5, function)
         self.grid.SetCellEditor(row, 5, wx.grid.GridCellChoiceEditor(
             [''] + self._function_names, allowOthers=True))
-        self.grid.SetCellValue(row, 6, '1')
+        self.grid.SetCellValue(row, 6, '1' if show else '0')
         self.grid.SetCellEditor(row, 6, wx.grid.GridCellBoolEditor())
         self.grid.SetCellRenderer(row, 6, wx.grid.GridCellBoolRenderer())
 
@@ -209,14 +242,178 @@ class PinoutDialog(wx.Dialog if wx else object):
             if dlg.ShowModal() == wx.ID_OK:
                 self.out_ctrl.SetValue(dlg.GetPath())
 
+    # ── Configuration persistence ─────────────────────────────────────────────
+
+    def export_config_dict(self):
+        """Export current dialog state into a JSON-serializable dictionary."""
+        pins_data = []
+        for row in range(self.grid.GetNumberRows()):
+            try:
+                number = int(self.grid.GetCellValue(row, 0).strip())
+                x      = float(self.grid.GetCellValue(row, 1).strip() or 0)
+                y      = float(self.grid.GetCellValue(row, 2).strip() or 0)
+            except ValueError:
+                continue
+            side  = self.grid.GetCellValue(row, 3).strip() or 'left'
+            label = self.grid.GetCellValue(row, 4).strip()
+            func  = self.grid.GetCellValue(row, 5).strip()
+            show  = self.grid.GetCellValue(row, 6).strip() in ('1', 'True', 'true', 'TRUE')
+
+            meta_info = self._meta.get(number, {})
+            pins_data.append({
+                'number':    number,
+                'x':         round(x, 3),
+                'y':         round(y, 3),
+                'side':      side,
+                'label':     label,
+                'function':  func,
+                'show':      show,
+                'pad_name':  meta_info.get('pad_name', str(number)),
+                'footprint': meta_info.get('footprint', ''),
+            })
+
+        sel_fp = None
+        if hasattr(self, 'fp_choice') and self.fp_choice.GetSelection() >= 0:
+            _, sel_fp = self._fp_items[self.fp_choice.GetSelection()]
+
+        return {
+            'version':            '1.0',
+            'selected_footprint': sel_fp,
+            'output_path':        self.out_ctrl.GetValue().strip(),
+            'pins':               pins_data,
+        }
+
+    def apply_config_dict(self, cfg):
+        """Apply a saved configuration dictionary to the dialog controls and grid."""
+        if not isinstance(cfg, dict) or 'pins' not in cfg:
+            return False
+
+        # Restore selected footprint if available
+        saved_fp = cfg.get('selected_footprint')
+        if saved_fp and hasattr(self, 'fp_choice'):
+            for idx, (_, ref) in enumerate(self._fp_items):
+                if ref == saved_fp:
+                    self.fp_choice.SetSelection(idx)
+                    pins, meta, _ = board_parser.parse_board(self._board, footprint_ref=saved_fp)
+                    self._meta = dict(meta)
+                    self._populate_grid(pins, meta)
+                    break
+
+        # Restore output path
+        if cfg.get('output_path'):
+            self.out_ctrl.SetValue(cfg['output_path'])
+
+        saved_pins = cfg.get('pins', [])
+        if not saved_pins:
+            return True
+
+        # Build lookup table from current grid rows
+        # Primary key: (footprint, pad_name), fallback: number or (x, y)
+        current_rows = {}
+        for row in range(self.grid.GetNumberRows()):
+            try:
+                num = int(self.grid.GetCellValue(row, 0).strip())
+                gx = round(float(self.grid.GetCellValue(row, 1).strip() or 0), 2)
+                gy = round(float(self.grid.GetCellValue(row, 2).strip() or 0), 2)
+            except ValueError:
+                continue
+            meta_info = self._meta.get(num, {})
+            fp = meta_info.get('footprint', '')
+            pad = meta_info.get('pad_name', str(num))
+            current_rows[(fp, pad)] = row
+            current_rows[num] = row
+            current_rows[(gx, gy)] = row
+
+        # Apply saved configurations to matching rows or append new ones
+        applied_rows = set()
+        for p in saved_pins:
+            num = p.get('number', 0)
+            px = round(float(p.get('x', 0)), 2)
+            py = round(float(p.get('y', 0)), 2)
+            fp = p.get('footprint', '')
+            pad = p.get('pad_name', str(num))
+
+            target_row = current_rows.get((fp, pad))
+            if target_row is None:
+                target_row = current_rows.get(num)
+            if target_row is None:
+                target_row = current_rows.get((px, py))
+
+            if target_row is not None and target_row not in applied_rows:
+                self.grid.SetCellValue(target_row, 3, p.get('side', 'left'))
+                self.grid.SetCellValue(target_row, 4, p.get('label', ''))
+                self.grid.SetCellValue(target_row, 5, p.get('function', ''))
+                self.grid.SetCellValue(target_row, 6, '1' if p.get('show', True) else '0')
+                applied_rows.add(target_row)
+            else:
+                # Additional row (e.g. multi-function stacked row)
+                self._append_row(
+                    number=num,
+                    x=p.get('x', 0.0),
+                    y=p.get('y', 0.0),
+                    side=p.get('side', 'left'),
+                    label=p.get('label', ''),
+                    function=p.get('function', ''),
+                    show=p.get('show', True),
+                )
+
+        return True
+
+    def save_config_file(self, path=None):
+        """Save current configuration to JSON."""
+        save_path = path or self._config_path
+        if not save_path:
+            return False
+        cfg = self.export_config_dict()
+        save_mod.save_pinout_config(save_path, cfg)
+        self._config_path = save_path
+        self.status_lbl.SetLabel(f"Config saved to: {os.path.basename(save_path)}")
+        return True
+
+    def load_config_file(self, path, silent=False):
+        """Load configuration from JSON file."""
+        cfg = save_mod.load_pinout_config(path)
+        if cfg and self.apply_config_dict(cfg):
+            self._config_path = path
+            self.status_lbl.SetLabel(f"Auto-resumed config: {os.path.basename(path)}")
+            if not silent:
+                wx.MessageBox(f'Configuration loaded from:\n{path}',
+                              'Pinout Image Generator', wx.OK | wx.ICON_INFORMATION)
+            return True
+        return False
+
+    def _on_save_config_btn(self, _event):
+        default_dir = os.path.dirname(self._config_path) if self._config_path else ''
+        default_file = os.path.basename(self._config_path) if self._config_path else 'pinout_config.json'
+        with wx.FileDialog(self, 'Save pinout configuration',
+                           defaultDir=default_dir, defaultFile=default_file,
+                           wildcard='JSON files (*.json)|*.json',
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                path = dlg.GetPath()
+                if self.save_config_file(path):
+                    wx.MessageBox(f'Configuration saved to:\n{path}',
+                                  'Pinout Image Generator', wx.OK | wx.ICON_INFORMATION)
+
+    def _on_load_config_btn(self, _event):
+        default_dir = os.path.dirname(self._config_path) if self._config_path else ''
+        with wx.FileDialog(self, 'Load pinout configuration',
+                           defaultDir=default_dir,
+                           wildcard='JSON files (*.json)|*.json',
+                           style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                self.load_config_file(dlg.GetPath(), silent=False)
+
     # ── Result ────────────────────────────────────────────────────────────────
 
     def collect(self, function_color_map):
-        """Read the grid and return (pins, svg_size_mm, output_path).
-        
-        Supports multiple functions per pin either via comma-separated entries
-        or multiple rows with identical pin number / coordinates.
-        """
+        """Read the grid, auto-save config, and return (pins, svg_size_mm, output_path)."""
+        # Automatically save configuration alongside the board / output
+        try:
+            self.save_config_file()
+        except Exception:
+            pass
+
         pins_by_key = {}
         pins_order = []
 
