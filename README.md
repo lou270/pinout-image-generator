@@ -1,4 +1,4 @@
-# Pinout Maker
+# Pinout Image Generator
 
 Generate annotated, publication-ready pinout diagrams (SVG & PNG) for PCBs. Works either:
 
@@ -24,8 +24,8 @@ Generate annotated, publication-ready pinout diagrams (SVG & PNG) for PCBs. Work
 
 1. Open KiCad → *Plugin and Content Manager* → *Manage repositories…* → *+*.
 2. Add `https://github.com/lou270/pinout-maker/releases/latest/download/metadata.json`.
-3. Select the repository, find **Pinout Maker** under *Plugins*, click *Install*.
-4. Restart the PCB editor — the Pinout Maker toolbar icon appears.
+3. Select the repository, find **Pinout Image Generator** under *Plugins*, click *Install*.
+4. Restart the PCB editor — the Pinout Image Generator toolbar icon appears.
 
 ### Manual install (KiCad 7, 8, 9+)
 
@@ -35,7 +35,7 @@ Generate annotated, publication-ready pinout diagrams (SVG & PNG) for PCBs. Work
 ### Using in KiCad
 
 1. Open your board in the PCB editor (`pcbnew`).
-2. Click the **Pinout Maker** toolbar icon (or *Tools → External Plugins → Pinout Maker*).
+2. Click the **Pinout Image Generator** toolbar icon (or *Tools → External Plugins → Pinout Image Generator*).
 3. A dialog shows pads detected on connector footprints (`J*`, `CN*`, `P*`, `HDR*`, `CONN*`, etc.).
    - Labels and functions are pre-filled using net names and regex rules from `plugins/netclass_map.json`.
    - Multiple functions per pin can be added using comma separation (e.g. `Label: "TX, GPIO5" | Function: "UART, GPIO/PWM"`) or across separate rows.

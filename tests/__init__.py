@@ -1,1 +1,1 @@
-# Pinout Maker Tests
+# Pinout Image Generator Tests

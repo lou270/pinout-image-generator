@@ -144,7 +144,7 @@ class PinoutGUI(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title('Pinout Maker')
+        self.title('Pinout Image Generator')
         self.resizable(True, True)
 
         self._config         = {}

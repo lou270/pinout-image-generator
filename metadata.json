@@ -1,8 +1,8 @@
 {
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
-  "name": "Pinout Maker",
-  "description": "Generate an annotated pinout SVG from the active board.",
-  "description_full": "Pinout Maker extracts pad positions, net names and net classes from the currently-open board and produces a coloured pinout diagram overlaid on a top-view render. Labels and function categories can be fully edited before rendering. A separate CLI and Tkinter GUI are also available for workflows that start from a gerber F.Mask SVG and a custom PNG.",
+  "name": "Pinout Image Generator",
+  "description": "Generate an annotated pinout image from the active board.",
+  "description_full": "Pinout Image Generator extracts pad positions, net names and net classes from the currently-open board and produces a coloured pinout diagram overlaid on a top-view render. Labels and function categories can be fully edited before rendering. A separate CLI and Tkinter GUI are also available for workflows that start from a gerber F.Mask SVG and a custom PNG.",
   "identifier": "com.lou270.pinout-maker",
   "type": "plugin",
   "author": {

@@ -35,7 +35,7 @@ class PinoutDialog(wx.Dialog if wx else object):
         if not wx:
             raise RuntimeError("wxPython is required to display PinoutDialog")
 
-        super().__init__(parent, title='Pinout Maker', size=(880, 580),
+        super().__init__(parent, title='Pinout Image Generator', size=(880, 580),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self._board          = board

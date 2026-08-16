@@ -39,7 +39,7 @@ CONFIG_PATH = os.path.join(PLUGIN_DIR, 'config.json')
 class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
 
     def defaults(self):
-        self.name        = 'Pinout Maker'
+        self.name        = 'Pinout Image Generator'
         self.category    = 'Documentation'
         self.description = 'Generate an annotated pinout SVG from the active board.'
         self.show_toolbar_button = True
@@ -52,7 +52,7 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
             if wx:
                 wx.MessageBox(
                     f'{exc}\n\n{traceback.format_exc()}',
-                    'Pinout Maker — error',
+                    'Pinout Image Generator — error',
                     wx.OK | wx.ICON_ERROR,
                 )
             else:
@@ -64,7 +64,7 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
 
         board = pcbnew.GetBoard()
         if board is None:
-            wx.MessageBox('No board open.', 'Pinout Maker', wx.OK | wx.ICON_WARNING)
+            wx.MessageBox('No board open.', 'Pinout Image Generator', wx.OK | wx.ICON_WARNING)
             return
 
         # Extract pads + nets.
@@ -102,17 +102,17 @@ class PinoutPlugin(pcbnew.ActionPlugin if pcbnew else object):
         dlg.Destroy()
 
         if not final_pins:
-            wx.MessageBox('No pins to render.', 'Pinout Maker',
+            wx.MessageBox('No pins to render.', 'Pinout Image Generator',
                           wx.OK | wx.ICON_WARNING)
             return
         if not out_path:
-            wx.MessageBox('No output path set.', 'Pinout Maker',
+            wx.MessageBox('No output path set.', 'Pinout Image Generator',
                           wx.OK | wx.ICON_WARNING)
             return
 
         render_pinout(final_pins, board_image, size, out_path)
 
         if wx.MessageBox(f'Generated:\n{out_path}\n\nOpen in browser?',
-                         'Pinout Maker', wx.YES_NO | wx.ICON_INFORMATION) == wx.YES:
+                         'Pinout Image Generator', wx.YES_NO | wx.ICON_INFORMATION) == wx.YES:
             from pathlib import Path
             webbrowser.open(Path(os.path.abspath(out_path)).as_uri())
